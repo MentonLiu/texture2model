@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "author": "600_liang",
   "description": "Generate a Blockbench voxel model from image pixels",
   "scripts": {
     "typecheck": "tsc --noEmit",

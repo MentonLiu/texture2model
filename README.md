@@ -8,7 +8,7 @@ Texture Model is a Blockbench plugin that turns an image into a voxel model. It 
 
 Texture → Pixels → ModelPlan → Preview → one Cube Group in the current project.
 
-The plugin UI follows Blockbench's configured language. It provides English and Simplified or Traditional Chinese; other Blockbench languages fall back to English.
+The plugin UI follows Blockbench's configured language. It provides English and Simplified or Traditional Chinese; other Blockbench languages fall back to English. Plugin author: `600_liang`. Tags: `Texture`, `Modeling`, `Tool`.
 
 ### Requirements and installation
 
@@ -65,7 +65,7 @@ npm run check
 npm run fixtures
 ~~~
 
-The source lives in [src](src), automated tests in [tests](tests), and design and verification notes in [docs](docs). Plugin author metadata intentionally contains a TODO until an author is supplied.
+The source lives in [src](src), automated tests in [tests](tests), and design and verification notes in [docs](docs). Plugin author metadata is `600_liang`; the Blockbench tags are `Texture`, `Modeling`, and `Tool`.
 
 ### License
 
@@ -77,7 +77,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 纹理 → 像素 → ModelPlan → 预览 → 在当前项目中创建一个 Cube 组。
 
-插件界面会跟随 Blockbench 当前配置的语言。支持英文、简体中文和繁体中文；其他 Blockbench 语言会显示英文。
+插件界面会跟随 Blockbench 当前配置的语言。支持英文、简体中文和繁体中文；其他 Blockbench 语言会显示英文。插件开发者：`600_liang`。标签：`Texture`、`Modeling`、`Tool`。
 
 ### 环境要求与安装
 
@@ -134,7 +134,7 @@ npm run check
 npm run fixtures
 ~~~
 
-源代码位于 [src](src)，自动化测试位于 [tests](tests)，架构与验证说明位于 [docs](docs)。在作者身份确认前，插件元数据中的作者字段保留 TODO。
+源代码位于 [src](src)，自动化测试位于 [tests](tests)，架构与验证说明位于 [docs](docs)。插件开发者为 `600_liang`，Blockbench 标签为 `Texture`、`Modeling` 和 `Tool`。
 
 ### 许可证
 
