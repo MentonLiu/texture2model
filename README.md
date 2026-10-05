@@ -60,3 +60,7 @@ npm run fixtures
 ~~~
 
 The source lives in [src](src), automated tests in [tests](tests), and design and verification notes in [docs](docs). Plugin author metadata intentionally contains a TODO until an author is supplied.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

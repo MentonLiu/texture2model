@@ -2,6 +2,7 @@
   "name": "texture-model",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Generate a Blockbench voxel model from image pixels",
   "scripts": {
     "typecheck": "tsc --noEmit",
