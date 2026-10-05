@@ -15,6 +15,11 @@ import {
   validatePlannerOptions
 } from './validation';
 
+// A one-pixel-wide image can have thousands of rows. Keep each row atomic,
+// while avoiding a separate browser timer for every tiny row.
+const ROW_BATCH_MAX_ROWS = 256;
+const ROW_BATCH_MAX_PIXELS = 2_048;
+
 export interface PlanTaskOptions {
   token?: CancellationToken;
   onProgress?: (processedPixels: number, totalPixels: number) => void;
@@ -75,8 +80,11 @@ export async function planModel(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
+  let rowsSinceYield = 0;
+  let pixelsAtLastRowYield = 0;
 
   for (let sourceY = 0; sourceY < image.height; sourceY += 1) {
+    task.token?.throwIfCancelled();
     for (let sourceX = 0; sourceX < image.width; sourceX += 1) {
       const offset = (sourceY * image.width + sourceX) * 4;
       const alpha = image.data[offset + 3] ?? 0;
@@ -109,9 +117,16 @@ export async function planModel(
       }
     }
     if (options.processingMode === 'row') {
-      task.onProgress?.(processedPixels, totalPixels);
-      await yieldToUI();
-      task.token?.throwIfCancelled();
+      rowsSinceYield += 1;
+      if (rowsSinceYield >= ROW_BATCH_MAX_ROWS ||
+          processedPixels - pixelsAtLastRowYield >= ROW_BATCH_MAX_PIXELS ||
+          sourceY === image.height - 1) {
+        task.onProgress?.(processedPixels, totalPixels);
+        await yieldToUI();
+        task.token?.throwIfCancelled();
+        rowsSinceYield = 0;
+        pixelsAtLastRowYield = processedPixels;
+      }
     }
   }
 

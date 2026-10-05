@@ -104,6 +104,32 @@ describe('model planner', () => {
       onProgress(processed) { progress = processed; },
       async yieldToUI() { token.cancel(); }
     })).rejects.toBeInstanceOf(TaskCancelledError);
-    expect(progress).toBe(2);
+    expect(progress).toBe(4);
+  });
+
+  it('batches many complete rows and preserves pixel-mode output', async () => {
+    const width = 2;
+    const height = 4_096;
+    const image: PixelImage = {
+      width,
+      height,
+      data: new Uint8ClampedArray(width * height * 4)
+    };
+    for (let index = 3; index < image.data.length; index += 4) image.data[index] = 255;
+    let rowYields = 0;
+    const rowProgress: number[] = [];
+    const row = await planModel(image, DEFAULT_GENERATOR_OPTIONS, {
+      onProgress(processed) { rowProgress.push(processed); },
+      async yieldToUI() { rowYields += 1; }
+    });
+    const pixel = await planModel(image, {
+      ...DEFAULT_GENERATOR_OPTIONS,
+      processingMode: 'pixel'
+    }, { async yieldToUI() { /* The scheduling mode must not change the plan. */ } });
+    expect(rowYields).toBe(16);
+    expect(rowYields).toBeLessThan(height / 100);
+    expect(rowProgress.every((processed) => processed % width === 0)).toBe(true);
+    expect(rowProgress[rowProgress.length - 1]).toBe(width * height);
+    expect(row).toEqual(pixel);
   });
 });
