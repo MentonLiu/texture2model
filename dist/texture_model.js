@@ -1553,7 +1553,8 @@ ${fragmentMarker}`);
   registerTranslations();
   BBPlugin.register("texture_model", {
     title: tr("plugin.title"),
-    author: "TODO: set plugin author",
+    author: "600_liang",
+    tags: ["Texture", "Modeling", "Tool"],
     description: tr("plugin.description"),
     icon: "view_in_ar",
     version: "0.1.0",
