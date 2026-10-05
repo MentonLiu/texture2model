@@ -1,7 +1,7 @@
-import { createGeneratorDialog } from './ui/generator_dialog';
+import { createGeneratorDialog, type GeneratorDialogHandle } from './ui/generator_dialog';
 import { pluginStyles } from './ui/styles';
 
-let generatorDialog: Dialog | undefined;
+let generatorDialog: GeneratorDialogHandle | undefined;
 let generatorAction: Action | undefined;
 let aboutAction: Action | undefined;
 let textureMenu: BarMenu | undefined;
@@ -22,7 +22,7 @@ BBPlugin.register('texture_model', {
       icon: 'image',
       click() {
         generatorDialog ??= createGeneratorDialog();
-        generatorDialog.show();
+        generatorDialog.dialog.show();
       }
     });
     aboutAction = new Action('texture_model_about', {
@@ -43,7 +43,7 @@ BBPlugin.register('texture_model', {
     MenuBar.addMenu(textureMenu, 'tools');
   },
   onunload() {
-    generatorDialog?.delete();
+    generatorDialog?.dispose();
     generatorDialog = undefined;
     textureMenu?.delete();
     textureMenu = undefined;
