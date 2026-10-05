@@ -34,7 +34,7 @@
     icon: "view_in_ar",
     version: "0.1.0",
     variant: "both",
-    min_version: "4.8.0",
+    min_version: "5.1.0",
     onload() {
       style = Blockbench.addCSS(pluginStyles);
       generatorAction = new Action("texture_model_open_generator", {
