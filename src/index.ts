@@ -1,3 +1,4 @@
+import { writeModel } from './blockbench/model_writer';
 import { createGeneratorDialog, type GeneratorDialogHandle } from './ui/generator_dialog';
 import { pluginStyles } from './ui/styles';
 
@@ -21,7 +22,10 @@ BBPlugin.register('texture_model', {
       name: '打开纹理模型生成器…',
       icon: 'image',
       click() {
-        generatorDialog ??= createGeneratorDialog();
+        generatorDialog ??= createGeneratorDialog((image, plan, options) => {
+          writeModel(image, plan, options);
+          Blockbench.showQuickMessage('纹理模型已生成');
+        });
         generatorDialog.dialog.show();
       }
     });

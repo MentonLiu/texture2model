@@ -1,39 +1,5 @@
 "use strict";
 (() => {
-  // src/domain/cancellation.ts
-  var TaskCancelledError = class extends Error {
-    constructor() {
-      super("Task cancelled");
-      this.name = "TaskCancelledError";
-    }
-  };
-  var CancellationToken = class {
-    constructor() {
-      this.cancelledValue = false;
-      this.listeners = /* @__PURE__ */ new Set();
-    }
-    get cancelled() {
-      return this.cancelledValue;
-    }
-    cancel() {
-      if (this.cancelledValue) return;
-      this.cancelledValue = true;
-      for (const listener of this.listeners) listener();
-      this.listeners.clear();
-    }
-    throwIfCancelled() {
-      if (this.cancelledValue) throw new TaskCancelledError();
-    }
-    onCancel(listener) {
-      if (this.cancelledValue) {
-        listener();
-        return () => void 0;
-      }
-      this.listeners.add(listener);
-      return () => this.listeners.delete(listener);
-    }
-  };
-
   // src/constants.ts
   var MIN_MAX_VOXELS = 1e3;
   var MAX_MAX_VOXELS = 1e5;
@@ -202,6 +168,261 @@
     };
   }
 
+  // src/domain/naming.ts
+  function removeExtension(fileName) {
+    const parts = fileName.split(/[/\\]/);
+    const basename = parts[parts.length - 1] ?? "";
+    const dot = basename.lastIndexOf(".");
+    return dot > 0 ? basename.slice(0, dot) : basename;
+  }
+  function normalizeGroupBase(fileName) {
+    return removeExtension(fileName).trim().replace(/[\\/:<>?"|]+/g, "_").replace(/\s+/g, "_").replace(/^_+|_+$/g, "") || "texture";
+  }
+  function defaultGroupName(fileName) {
+    return `${normalizeGroupBase(fileName)}_texture_model`;
+  }
+  function uniqueGroupName(preferredName, existingNames) {
+    const base = preferredName.trim() || "texture_model";
+    const used = new Set(Array.from(existingNames, (name) => name.toLowerCase()));
+    if (!used.has(base.toLowerCase())) return base;
+    for (let suffix = 2; ; suffix += 1) {
+      const candidate = `${base}_${suffix}`;
+      if (!used.has(candidate.toLowerCase())) return candidate;
+    }
+  }
+  function uniqueTextureName(fileName, existingNames) {
+    const parts = fileName.split(/[/\\]/);
+    const name = parts[parts.length - 1]?.trim() || "texture.png";
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const extension = dot > 0 ? name.slice(dot) : "";
+    const used = new Set(Array.from(existingNames, (existing) => existing.toLowerCase()));
+    if (!used.has(name.toLowerCase())) return name;
+    for (let suffix = 2; ; suffix += 1) {
+      const candidate = `${base}_${suffix}${extension}`;
+      if (!used.has(candidate.toLowerCase())) return candidate;
+    }
+  }
+
+  // src/domain/pixel_to_uv.ts
+  function pixelToUVRect(x, y, imageWidth, imageHeight, uvWidth, uvHeight) {
+    if (!Number.isInteger(imageWidth) || imageWidth < 1 || !Number.isInteger(imageHeight) || imageHeight < 1 || !Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0 || !Number.isInteger(x) || x < 0 || x >= imageWidth || !Number.isInteger(y) || y < 0 || y >= imageHeight) {
+      throw new ModelValidationError("Pixel or UV dimensions are invalid.");
+    }
+    return [
+      x / imageWidth * uvWidth,
+      y / imageHeight * uvHeight,
+      (x + 1) / imageWidth * uvWidth,
+      (y + 1) / imageHeight * uvHeight
+    ];
+  }
+
+  // src/blockbench/texture_writer.ts
+  function writeTexture(image, track) {
+    const name = uniqueTextureName(image.fileName, Texture.all.map((texture2) => texture2.name));
+    const texture = new Texture({ name });
+    track(texture);
+    texture.uv_width = image.width;
+    texture.uv_height = image.height;
+    texture.fromDataURL(image.dataURL);
+    return texture.add(false);
+  }
+
+  // src/blockbench/model_writer.ts
+  var FACE_DIRECTIONS = [
+    "north",
+    "south",
+    "east",
+    "west",
+    "up",
+    "down"
+  ];
+  function sameNumber(actual, expected) {
+    return Number.isFinite(actual) && Math.abs(actual - expected) <= 1e-8 * Math.max(1, Math.abs(expected));
+  }
+  function validatePlan(image, plan, options) {
+    validatePixelImage(image);
+    validatePlannerOptions(options);
+    validateMaxVoxels(options.maxVoxels);
+    if (typeof image.dataURL !== "string" || !image.dataURL.startsWith("data:image/")) {
+      throw new ModelValidationError("The decoded image has no usable Data URL.");
+    }
+    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
+      throw new ModelValidationError("Preview no longer matches the chosen image or settings.");
+    }
+    const expectedCount = countImagePixels(
+      image,
+      options.alphaThreshold,
+      options.includeTransparent
+    ).voxelCount;
+    if (plan.voxelCount !== expectedCount) {
+      throw new ModelValidationError("Preview no longer matches the transparency settings.");
+    }
+    if (plan.voxelCount > options.maxVoxels) {
+      throw new ModelValidationError(
+        `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`
+      );
+    }
+    const size = options.voxelSize;
+    let minSourceX = Infinity;
+    let minSourceY = Infinity;
+    let maxSourceX = -Infinity;
+    let maxSourceY = -Infinity;
+    let previousSourceIndex = -1;
+    for (const voxel of plan.voxels) {
+      const { sourceX, sourceY } = voxel;
+      const sourceIndex = sourceY * image.width + sourceX;
+      const pixelIndex = sourceIndex * 4;
+      if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || sourceIndex <= previousSourceIndex || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
+        throw new ModelValidationError("Preview pixel data is stale or invalid.");
+      }
+      previousSourceIndex = sourceIndex;
+      minSourceX = Math.min(minSourceX, sourceX);
+      maxSourceX = Math.max(maxSourceX, sourceX);
+      minSourceY = Math.min(minSourceY, sourceY);
+      maxSourceY = Math.max(maxSourceY, sourceY);
+    }
+    if (plan.voxelCount === 0) {
+      if ([...plan.bounds.min, ...plan.bounds.max, ...plan.bounds.size].some((dimension) => !sameNumber(dimension, 0))) {
+        throw new ModelValidationError("Empty preview bounds are invalid.");
+      }
+      return;
+    }
+    const minX = minSourceX * size;
+    const maxX = (maxSourceX + 1) * size;
+    const minY = (image.height - 1 - maxSourceY) * size;
+    const maxY = (image.height - minSourceY) * size;
+    const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
+    const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
+    const offsetZ = options.centerModel ? -size / 2 : 0;
+    for (const voxel of plan.voxels) {
+      if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) || !sameNumber(voxel.z, offsetZ)) {
+        throw new ModelValidationError("Preview geometry is stale or invalid.");
+      }
+    }
+    const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
+    const expectedMax = [maxX + offsetX, maxY + offsetY, size + offsetZ];
+    for (let axis = 0; axis < 3; axis += 1) {
+      if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) || !sameNumber(
+        plan.bounds.size[axis] ?? NaN,
+        (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN)
+      )) {
+        throw new ModelValidationError("Preview bounds are stale or invalid.");
+      }
+    }
+  }
+  function preflightFormat() {
+    if (typeof Project === "undefined" || !Project || typeof Format === "undefined" || !Format) {
+      throw new ModelValidationError("Open a Blockbench model project before generating.");
+    }
+    if (typeof Cube === "undefined" || typeof Group === "undefined" || typeof Texture === "undefined" || typeof Undo === "undefined" || typeof Canvas === "undefined" || !Format.edit_mode || Format.image_editor) {
+      throw new ModelValidationError("The current project format does not support Cube editing.");
+    }
+    if (Format.box_uv && !Format.optional_box_uv || Format.single_texture || Format.per_group_texture) {
+      throw new ModelValidationError(
+        "The current project format cannot use an independent texture on every Cube face."
+      );
+    }
+    if (!Format.per_texture_uv_size && (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 || !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
+      throw new ModelValidationError("The current project UV dimensions are invalid.");
+    }
+  }
+  function cubeFaces(uv, texture) {
+    const faces = {};
+    for (const direction of FACE_DIRECTIONS) {
+      faces[direction] = { enabled: true, texture: texture.uuid, uv: [...uv] };
+    }
+    return faces;
+  }
+  function makeCube(voxel, size, texture, image) {
+    const uv = pixelToUVRect(
+      voxel.sourceX,
+      voxel.sourceY,
+      image.width,
+      image.height,
+      texture.getUVWidth(),
+      texture.getUVHeight()
+    );
+    return new Cube({
+      name: `px_${voxel.sourceX}_${voxel.sourceY}`,
+      from: [voxel.x, voxel.y, voxel.z],
+      to: [voxel.x + size, voxel.y + size, voxel.z + size],
+      box_uv: false,
+      autouv: 0,
+      faces: cubeFaces(uv, texture)
+    });
+  }
+  function writeModel(image, plan, options) {
+    validatePlan(image, plan, options);
+    preflightFormat();
+    if (typeof options.groupName !== "string") {
+      throw new ModelValidationError("Group name must be text.");
+    }
+    const preferredName = options.groupName.trim() || defaultGroupName(image.fileName);
+    const groupName = uniqueGroupName(preferredName, Group.all.map((group) => group.name));
+    const aspects = {
+      outliner: true,
+      elements: [],
+      groups: [],
+      textures: [],
+      selected_texture: true
+    };
+    Undo.initEdit(aspects);
+    try {
+      const texture = writeTexture(image, (created) => aspects.textures?.push(created));
+      const group = new Group({ name: groupName });
+      aspects.groups?.push(group);
+      group.addTo("root").init();
+      for (const voxel of plan.voxels) {
+        const cube = makeCube(voxel, plan.voxelSize, texture, image);
+        aspects.elements?.push(cube);
+        cube.addTo(group).init();
+      }
+      Canvas.updateView({
+        elements: aspects.elements,
+        element_aspects: { faces: true, uv: true }
+      });
+      Undo.finishEdit("Generate Texture Model", aspects);
+    } catch (error) {
+      Undo.cancelEdit(true);
+      throw error;
+    }
+  }
+
+  // src/domain/cancellation.ts
+  var TaskCancelledError = class extends Error {
+    constructor() {
+      super("Task cancelled");
+      this.name = "TaskCancelledError";
+    }
+  };
+  var CancellationToken = class {
+    constructor() {
+      this.cancelledValue = false;
+      this.listeners = /* @__PURE__ */ new Set();
+    }
+    get cancelled() {
+      return this.cancelledValue;
+    }
+    cancel() {
+      if (this.cancelledValue) return;
+      this.cancelledValue = true;
+      for (const listener of this.listeners) listener();
+      this.listeners.clear();
+    }
+    throwIfCancelled() {
+      if (this.cancelledValue) throw new TaskCancelledError();
+    }
+    onCancel(listener) {
+      if (this.cancelledValue) {
+        listener();
+        return () => void 0;
+      }
+      this.listeners.add(listener);
+      return () => this.listeners.delete(listener);
+    }
+  };
+
   // src/domain/image_decoder.ts
   function supportedMimeType(file) {
     const declared = file.type.toLowerCase();
@@ -302,20 +523,6 @@
       imageData,
       visiblePixelCount: countImagePixels(pixels, 0, false).visiblePixels
     };
-  }
-
-  // src/domain/naming.ts
-  function removeExtension(fileName) {
-    const parts = fileName.split(/[/\\]/);
-    const basename = parts[parts.length - 1] ?? "";
-    const dot = basename.lastIndexOf(".");
-    return dot > 0 ? basename.slice(0, dot) : basename;
-  }
-  function normalizeGroupBase(fileName) {
-    return removeExtension(fileName).trim().replace(/[\\/:<>?"|]+/g, "_").replace(/\s+/g, "_").replace(/^_+|_+$/g, "") || "texture";
-  }
-  function defaultGroupName(fileName) {
-    return `${normalizeGroupBase(fileName)}_texture_model`;
   }
 
   // src/preview/preview_renderer.ts
@@ -999,7 +1206,10 @@ ${fragmentMarker}`);
         name: "\u6253\u5F00\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668\u2026",
         icon: "image",
         click() {
-          generatorDialog ?? (generatorDialog = createGeneratorDialog());
+          generatorDialog ?? (generatorDialog = createGeneratorDialog((image, plan, options) => {
+            writeModel(image, plan, options);
+            Blockbench.showQuickMessage("\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210");
+          }));
           generatorDialog.dialog.show();
         }
       });
