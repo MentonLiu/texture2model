@@ -1,0 +1,22 @@
+{
+  "name": "texture-model",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Generate a Blockbench voxel model from image pixels",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/texture_model.js",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "blockbench-types": "^5.2.0",
+    "esbuild": "^0.25.10",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4"
+  }
+}
