@@ -1,4 +1,5 @@
 import type { BufferGeometry, InstancedMesh, Material, OrthographicCamera, Scene, WebGLRenderer } from 'three';
+import { tr } from '../i18n';
 import type { ModelPlan, VoxelPlan } from '../types';
 
 const BACKGROUND = '#1b1d25';
@@ -275,7 +276,9 @@ export class PreviewRenderer {
     this.context.font = '14px sans-serif';
     this.context.textAlign = 'center';
     this.context.textBaseline = 'middle';
-    this.context.fillText(this.plan ? '没有可预览的 Cube' : '选择纹理后预览', this.width / 2, this.height / 2);
+    this.context.fillText(
+      tr(this.plan ? 'preview.empty' : 'preview.select_image'), this.width / 2, this.height / 2
+    );
   }
 
   private drawCanvasFallback(plan: ModelPlan): void {

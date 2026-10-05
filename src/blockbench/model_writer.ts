@@ -24,22 +24,30 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   validatePlannerOptions(options);
   validateMaxVoxels(options.maxVoxels);
   if (typeof image.dataURL !== 'string' || !image.dataURL.startsWith('data:image/')) {
-    throw new ModelValidationError('The decoded image has no usable Data URL.');
+    throw new ModelValidationError(
+      'The decoded image has no usable Data URL.', 'error.decoded_data_url'
+    );
   }
   if (plan.width !== image.width || plan.height !== image.height ||
       plan.voxelSize !== options.voxelSize ||
       !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
-    throw new ModelValidationError('Preview no longer matches the chosen image or settings.');
+    throw new ModelValidationError(
+      'Preview no longer matches the chosen image or settings.', 'error.preview_stale'
+    );
   }
   const expectedCount = countImagePixels(
     image, options.alphaThreshold, options.includeTransparent
   ).voxelCount;
   if (plan.voxelCount !== expectedCount) {
-    throw new ModelValidationError('Preview no longer matches the transparency settings.');
+    throw new ModelValidationError(
+      'Preview no longer matches the transparency settings.', 'error.preview_transparency_stale'
+    );
   }
   if (plan.voxelCount > options.maxVoxels) {
     throw new ModelValidationError(
-      `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`
+      `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`,
+      'error.cube_limit',
+      [plan.voxelCount, options.maxVoxels]
     );
   }
 
@@ -61,7 +69,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
         voxel.rgba.b !== image.data[pixelIndex + 2] ||
         voxel.rgba.a !== image.data[pixelIndex + 3] ||
         (!options.includeTransparent && voxel.rgba.a <= options.alphaThreshold)) {
-      throw new ModelValidationError('Preview pixel data is stale or invalid.');
+      throw new ModelValidationError('Preview pixel data is stale or invalid.', 'error.preview_pixels');
     }
     previousSourceIndex = sourceIndex;
     minSourceX = Math.min(minSourceX, sourceX);
@@ -73,7 +81,9 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   if (plan.voxelCount === 0) {
     if ([...plan.bounds.min, ...plan.bounds.max, ...plan.bounds.size]
       .some((dimension) => !sameNumber(dimension, 0))) {
-      throw new ModelValidationError('Empty preview bounds are invalid.');
+      throw new ModelValidationError(
+        'Empty preview bounds are invalid.', 'error.preview_empty_bounds'
+      );
     }
     return;
   }
@@ -88,7 +98,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
     if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) ||
         !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) ||
         !sameNumber(voxel.z, offsetZ)) {
-      throw new ModelValidationError('Preview geometry is stale or invalid.');
+      throw new ModelValidationError('Preview geometry is stale or invalid.', 'error.preview_geometry');
     }
   }
   const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
@@ -98,7 +108,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
         !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) ||
         !sameNumber(plan.bounds.size[axis] ?? NaN,
           (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN))) {
-      throw new ModelValidationError('Preview bounds are stale or invalid.');
+      throw new ModelValidationError('Preview bounds are stale or invalid.', 'error.preview_bounds');
     }
   }
 }
@@ -106,29 +116,32 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
 function preflightFormat(image: DecodedImage): void {
   if (typeof Project === 'undefined' || !Project ||
       typeof Format === 'undefined' || !Format) {
-    throw new ModelValidationError('Open a Blockbench model project before generating.');
+    throw new ModelValidationError('Open a Blockbench model project before generating.', 'error.open_project');
   }
   if (typeof Cube === 'undefined' || typeof Group === 'undefined' ||
       typeof Texture === 'undefined' || typeof Undo === 'undefined' ||
       typeof Canvas === 'undefined' || !Format.edit_mode || Format.image_editor) {
-    throw new ModelValidationError('The current project format does not support Cube editing.');
+    throw new ModelValidationError(
+      'The current project format does not support Cube editing.', 'error.cube_unsupported'
+    );
   }
   if ((Format.box_uv && !Format.optional_box_uv) ||
       Format.single_texture || Format.per_group_texture) {
     throw new ModelValidationError(
-      'The current project format cannot use an independent texture on every Cube face.'
+      'The current project format cannot use an independent texture on every Cube face.',
+      'error.per_face_uv_unsupported'
     );
   }
   if (!Format.per_texture_uv_size &&
       (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 ||
        !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
-    throw new ModelValidationError('The current project UV dimensions are invalid.');
+    throw new ModelValidationError('The current project UV dimensions are invalid.', 'error.project_uv_size');
   }
   const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
   const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
   if (!Number.isFinite(uvWidth) || uvWidth <= 0 ||
       !Number.isFinite(uvHeight) || uvHeight <= 0) {
-    throw new ModelValidationError('The current project has invalid UV dimensions.');
+    throw new ModelValidationError('The current project has invalid UV dimensions.', 'error.uv_size');
   }
 }
 
@@ -168,7 +181,7 @@ export function writeModel(
   validatePlan(image, plan, options);
   preflightFormat(image);
   if (typeof options.groupName !== 'string') {
-    throw new ModelValidationError('Group name must be text.');
+    throw new ModelValidationError('Group name must be text.', 'error.group_name');
   }
   const preferredName = options.groupName.trim() || defaultGroupName(image.fileName);
   const groupName = uniqueGroupName(preferredName, Group.all.map((group) => group.name));

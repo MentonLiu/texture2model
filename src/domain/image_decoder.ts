@@ -13,7 +13,7 @@ function supportedMimeType(file: File): string {
       : extension === 'webp' ? 'image/webp' : '';
   const mimeType = declared || inferred;
   if (!SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
-    throw new ModelValidationError('Choose a PNG, JPEG, or WebP image.');
+    throw new ModelValidationError('Choose a PNG, JPEG, or WebP image.', 'error.image_type');
   }
   return mimeType;
 }
@@ -36,9 +36,9 @@ function readAsDataURL(file: File, token?: CancellationToken): Promise<string> {
     };
     reader.onload = () => {
       if (typeof reader.result === 'string') finish(reader.result);
-      else finish(new ModelValidationError('Could not read the image file.'));
+      else finish(new ModelValidationError('Could not read the image file.', 'error.image_read'));
     };
-    reader.onerror = () => finish(new ModelValidationError('Could not read the image file.'));
+    reader.onerror = () => finish(new ModelValidationError('Could not read the image file.', 'error.image_read'));
     reader.onabort = () => finish(new TaskCancelledError());
     unsubscribe = token?.onCancel(() => {
       reader.abort();
@@ -48,7 +48,7 @@ function readAsDataURL(file: File, token?: CancellationToken): Promise<string> {
     try {
       reader.readAsDataURL(file);
     } catch {
-      finish(new ModelValidationError('Could not read the image file.'));
+      finish(new ModelValidationError('Could not read the image file.', 'error.image_read'));
     }
   });
 }
@@ -69,7 +69,7 @@ function loadImage(dataURL: string, token?: CancellationToken): Promise<HTMLImag
       else resolve(image);
     };
     image.onload = () => finish();
-    image.onerror = () => finish(new ModelValidationError('Could not decode the image.'));
+      image.onerror = () => finish(new ModelValidationError('Could not decode the image.', 'error.image_decode'));
     unsubscribe = token?.onCancel(() => {
       image.src = '';
       finish(new TaskCancelledError());
@@ -90,13 +90,13 @@ export async function decodeImageFile(
   token?.throwIfCancelled();
   if (!Number.isSafeInteger(image.naturalWidth) || image.naturalWidth < 1 ||
       !Number.isSafeInteger(image.naturalHeight) || image.naturalHeight < 1) {
-    throw new ModelValidationError('The image has invalid dimensions.');
+    throw new ModelValidationError('The image has invalid dimensions.', 'error.image_size');
   }
   const canvas = document.createElement('canvas');
   canvas.width = image.naturalWidth;
   canvas.height = image.naturalHeight;
   const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) throw new ModelValidationError('Canvas 2D is unavailable.');
+  if (!context) throw new ModelValidationError('Canvas 2D is unavailable.', 'error.canvas');
   context.drawImage(image, 0, 0);
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
   token?.throwIfCancelled();

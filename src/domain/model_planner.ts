@@ -68,7 +68,9 @@ export async function planModel(
   validatePlannerOptions(options);
   const batchSize = task.pixelBatchSize ?? DEFAULT_PIXEL_BATCH_SIZE;
   if (!Number.isInteger(batchSize) || batchSize < 1) {
-    throw new ModelValidationError('Pixel batch size must be a positive integer.');
+    throw new ModelValidationError(
+      'Pixel batch size must be a positive integer.', 'error.pixel_batch'
+    );
   }
   task.token?.throwIfCancelled();
 

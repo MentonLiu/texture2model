@@ -1,4 +1,5 @@
 import { writeModel } from './blockbench/model_writer';
+import { registerTranslations, tr } from './i18n';
 import { createGeneratorDialog, type GeneratorDialogHandle } from './ui/generator_dialog';
 import { pluginStyles } from './ui/styles';
 
@@ -8,10 +9,12 @@ let aboutAction: Action | undefined;
 let textureMenu: BarMenu | undefined;
 let style: Deletable | undefined;
 
+registerTranslations();
+
 BBPlugin.register('texture_model', {
-  title: 'Texture Model',
+  title: tr('plugin.title'),
   author: 'TODO: set plugin author',
-  description: 'Generate one textured cube for each selected image pixel.',
+  description: tr('plugin.description'),
   icon: 'view_in_ar',
   version: '0.1.0',
   variant: 'both',
@@ -19,29 +22,29 @@ BBPlugin.register('texture_model', {
   onload() {
     style = Blockbench.addCSS(pluginStyles);
     generatorAction = new Action('texture_model_open_generator', {
-      name: '打开纹理模型生成器…',
+      name: tr('menu.generate'),
       icon: 'image',
       click() {
         generatorDialog ??= createGeneratorDialog((image, plan, options) => {
           writeModel(image, plan, options);
-          Blockbench.showQuickMessage('纹理模型已生成');
+          Blockbench.showQuickMessage(tr('status.generated'));
         });
         generatorDialog.dialog.show();
       }
     });
     aboutAction = new Action('texture_model_about', {
-      name: '关于插件',
+      name: tr('menu.about'),
       icon: 'info',
       click() {
         Blockbench.showMessageBox({
-          title: '纹理模型',
-          message: 'Texture Model 0.1.0\n将图片像素转换为 Blockbench 体素模型。',
-          buttons: ['确定']
+          title: tr('about.title'),
+          message: tr('about.message'),
+          buttons: [tr('dialog.ok')]
         });
       }
     });
     textureMenu = new BarMenu('texture_model_menu', [generatorAction, aboutAction], {
-      name: '纹理模型',
+      name: tr('menu.title'),
       icon: 'view_in_ar'
     });
     MenuBar.addMenu(textureMenu, 'tools');

@@ -19,7 +19,7 @@ export function pixelToUVRect(
       !Number.isFinite(uvHeight) || uvHeight <= 0 ||
       !Number.isInteger(x) || x < 0 || x >= imageWidth ||
       !Number.isInteger(y) || y < 0 || y >= imageHeight) {
-    throw new ModelValidationError('Pixel or UV dimensions are invalid.');
+    throw new ModelValidationError('Pixel or UV dimensions are invalid.', 'error.pixel_uv');
   }
   return [
     x / imageWidth * uvWidth,
