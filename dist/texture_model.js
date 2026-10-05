@@ -13,48 +13,64 @@
 
   // src/domain/validation.ts
   var ModelValidationError = class extends Error {
-    constructor(message) {
+    constructor(message, translationKey = "error.unexpected", translationVariables = []) {
       super(message);
+      this.translationKey = translationKey;
+      this.translationVariables = translationVariables;
       this.name = "ModelValidationError";
     }
   };
   function validatePixelImage(image) {
     if (!Number.isSafeInteger(image.width) || image.width < 1 || !Number.isSafeInteger(image.height) || image.height < 1) {
-      throw new ModelValidationError("Image width and height must be positive integers.");
+      throw new ModelValidationError(
+        "Image width and height must be positive integers.",
+        "error.image_dimensions"
+      );
     }
     const pixelCount = image.width * image.height;
     if (!Number.isSafeInteger(pixelCount * 4) || image.data.length !== pixelCount * 4) {
-      throw new ModelValidationError("Image RGBA data length does not match its dimensions.");
+      throw new ModelValidationError(
+        "Image RGBA data length does not match its dimensions.",
+        "error.image_rgba"
+      );
     }
   }
   function validatePlannerOptions(options) {
     if (options.processingMode !== "row" && options.processingMode !== "pixel") {
-      throw new ModelValidationError("Processing mode must be row or pixel.");
+      throw new ModelValidationError("Processing mode must be row or pixel.", "error.processing_mode");
     }
     if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
-      throw new ModelValidationError("Voxel size must be greater than zero.");
+      throw new ModelValidationError("Voxel size must be greater than zero.", "error.voxel_size");
     }
     validateAlphaThreshold(options.alphaThreshold);
     if (typeof options.includeTransparent !== "boolean" || typeof options.centerModel !== "boolean") {
-      throw new ModelValidationError("Transparency and centering settings must be boolean.");
+      throw new ModelValidationError(
+        "Transparency and centering settings must be boolean.",
+        "error.boolean_options"
+      );
     }
   }
   function validateAlphaThreshold(alphaThreshold) {
     if (!Number.isInteger(alphaThreshold) || alphaThreshold < 0 || alphaThreshold > 255) {
-      throw new ModelValidationError("Alpha threshold must be an integer from 0 to 255.");
+      throw new ModelValidationError(
+        "Alpha threshold must be an integer from 0 to 255.",
+        "error.alpha_threshold"
+      );
     }
   }
   function validateMaxVoxels(maxVoxels) {
     if (!Number.isInteger(maxVoxels) || maxVoxels < MIN_MAX_VOXELS || maxVoxels > MAX_MAX_VOXELS) {
       throw new ModelValidationError(
-        `Maximum Cube count must be between ${MIN_MAX_VOXELS} and ${MAX_MAX_VOXELS}.`
+        `Maximum Cube count must be between ${MIN_MAX_VOXELS} and ${MAX_MAX_VOXELS}.`,
+        "error.max_cubes_range",
+        [MIN_MAX_VOXELS, MAX_MAX_VOXELS]
       );
     }
   }
   function getVoxelLimitStatus(voxelCount, maxVoxels) {
     validateMaxVoxels(maxVoxels);
     if (!Number.isSafeInteger(voxelCount) || voxelCount < 0) {
-      throw new ModelValidationError("Cube count must be a nonnegative integer.");
+      throw new ModelValidationError("Cube count must be a nonnegative integer.", "error.cube_count");
     }
     if (voxelCount > maxVoxels) return "exceeded";
     if (voxelCount > PERFORMANCE_WARNING_VOXELS) return "warning";
@@ -90,7 +106,10 @@
     validatePlannerOptions(options);
     const batchSize = task.pixelBatchSize ?? DEFAULT_PIXEL_BATCH_SIZE;
     if (!Number.isInteger(batchSize) || batchSize < 1) {
-      throw new ModelValidationError("Pixel batch size must be a positive integer.");
+      throw new ModelValidationError(
+        "Pixel batch size must be a positive integer.",
+        "error.pixel_batch"
+      );
     }
     task.token?.throwIfCancelled();
     const totalPixels = image.width * image.height;
@@ -217,7 +236,7 @@
   // src/domain/pixel_to_uv.ts
   function pixelToUVRect(x, y, imageWidth, imageHeight, uvWidth, uvHeight) {
     if (!Number.isInteger(imageWidth) || imageWidth < 1 || !Number.isInteger(imageHeight) || imageHeight < 1 || !Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0 || !Number.isInteger(x) || x < 0 || x >= imageWidth || !Number.isInteger(y) || y < 0 || y >= imageHeight) {
-      throw new ModelValidationError("Pixel or UV dimensions are invalid.");
+      throw new ModelValidationError("Pixel or UV dimensions are invalid.", "error.pixel_uv");
     }
     return [
       x / imageWidth * uvWidth,
@@ -255,10 +274,16 @@
     validatePlannerOptions(options);
     validateMaxVoxels(options.maxVoxels);
     if (typeof image.dataURL !== "string" || !image.dataURL.startsWith("data:image/")) {
-      throw new ModelValidationError("The decoded image has no usable Data URL.");
+      throw new ModelValidationError(
+        "The decoded image has no usable Data URL.",
+        "error.decoded_data_url"
+      );
     }
     if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
-      throw new ModelValidationError("Preview no longer matches the chosen image or settings.");
+      throw new ModelValidationError(
+        "Preview no longer matches the chosen image or settings.",
+        "error.preview_stale"
+      );
     }
     const expectedCount = countImagePixels(
       image,
@@ -266,11 +291,16 @@
       options.includeTransparent
     ).voxelCount;
     if (plan.voxelCount !== expectedCount) {
-      throw new ModelValidationError("Preview no longer matches the transparency settings.");
+      throw new ModelValidationError(
+        "Preview no longer matches the transparency settings.",
+        "error.preview_transparency_stale"
+      );
     }
     if (plan.voxelCount > options.maxVoxels) {
       throw new ModelValidationError(
-        `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`
+        `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`,
+        "error.cube_limit",
+        [plan.voxelCount, options.maxVoxels]
       );
     }
     const size = options.voxelSize;
@@ -284,7 +314,7 @@
       const sourceIndex = sourceY * image.width + sourceX;
       const pixelIndex = sourceIndex * 4;
       if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || sourceIndex <= previousSourceIndex || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
-        throw new ModelValidationError("Preview pixel data is stale or invalid.");
+        throw new ModelValidationError("Preview pixel data is stale or invalid.", "error.preview_pixels");
       }
       previousSourceIndex = sourceIndex;
       minSourceX = Math.min(minSourceX, sourceX);
@@ -294,7 +324,10 @@
     }
     if (plan.voxelCount === 0) {
       if ([...plan.bounds.min, ...plan.bounds.max, ...plan.bounds.size].some((dimension) => !sameNumber(dimension, 0))) {
-        throw new ModelValidationError("Empty preview bounds are invalid.");
+        throw new ModelValidationError(
+          "Empty preview bounds are invalid.",
+          "error.preview_empty_bounds"
+        );
       }
       return;
     }
@@ -307,7 +340,7 @@
     const offsetZ = options.centerModel ? -size / 2 : 0;
     for (const voxel of plan.voxels) {
       if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) || !sameNumber(voxel.z, offsetZ)) {
-        throw new ModelValidationError("Preview geometry is stale or invalid.");
+        throw new ModelValidationError("Preview geometry is stale or invalid.", "error.preview_geometry");
       }
     }
     const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
@@ -317,29 +350,33 @@
         plan.bounds.size[axis] ?? NaN,
         (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN)
       )) {
-        throw new ModelValidationError("Preview bounds are stale or invalid.");
+        throw new ModelValidationError("Preview bounds are stale or invalid.", "error.preview_bounds");
       }
     }
   }
   function preflightFormat(image) {
     if (typeof Project === "undefined" || !Project || typeof Format === "undefined" || !Format) {
-      throw new ModelValidationError("Open a Blockbench model project before generating.");
+      throw new ModelValidationError("Open a Blockbench model project before generating.", "error.open_project");
     }
     if (typeof Cube === "undefined" || typeof Group === "undefined" || typeof Texture === "undefined" || typeof Undo === "undefined" || typeof Canvas === "undefined" || !Format.edit_mode || Format.image_editor) {
-      throw new ModelValidationError("The current project format does not support Cube editing.");
+      throw new ModelValidationError(
+        "The current project format does not support Cube editing.",
+        "error.cube_unsupported"
+      );
     }
     if (Format.box_uv && !Format.optional_box_uv || Format.single_texture || Format.per_group_texture) {
       throw new ModelValidationError(
-        "The current project format cannot use an independent texture on every Cube face."
+        "The current project format cannot use an independent texture on every Cube face.",
+        "error.per_face_uv_unsupported"
       );
     }
     if (!Format.per_texture_uv_size && (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 || !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
-      throw new ModelValidationError("The current project UV dimensions are invalid.");
+      throw new ModelValidationError("The current project UV dimensions are invalid.", "error.project_uv_size");
     }
     const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
     const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
     if (!Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0) {
-      throw new ModelValidationError("The current project has invalid UV dimensions.");
+      throw new ModelValidationError("The current project has invalid UV dimensions.", "error.uv_size");
     }
   }
   function cubeFaces(uv, texture) {
@@ -371,7 +408,7 @@
     validatePlan(image, plan, options);
     preflightFormat(image);
     if (typeof options.groupName !== "string") {
-      throw new ModelValidationError("Group name must be text.");
+      throw new ModelValidationError("Group name must be text.", "error.group_name");
     }
     const preferredName = options.groupName.trim() || defaultGroupName(image.fileName);
     const groupName = uniqueGroupName(preferredName, Group.all.map((group) => group.name));
@@ -400,6 +437,265 @@
       Undo.cancelEdit(true);
       throw error;
     }
+  }
+
+  // src/i18n.ts
+  var ENGLISH = {
+    "texture_model.plugin.title": "Texture Model",
+    "texture_model.plugin.description": "Generate one textured cube for each selected image pixel.",
+    "texture_model.menu.title": "Texture Model",
+    "texture_model.menu.generate": "Open Texture Model Generator\u2026",
+    "texture_model.menu.about": "About Texture Model",
+    "texture_model.about.title": "Texture Model",
+    "texture_model.about.message": "Texture Model 0.1.0\nTurn image pixels into a Blockbench voxel model.",
+    "texture_model.dialog.ok": "OK",
+    "texture_model.dialog.title": "Texture Model Generator",
+    "texture_model.dialog.cancel": "Cancel",
+    "texture_model.section.texture": "Texture",
+    "texture_model.field.choose_texture": "Choose texture",
+    "texture_model.field.no_image": "No image selected",
+    "texture_model.field.thumbnail_alt": "Texture thumbnail",
+    "texture_model.section.settings": "Generation Settings",
+    "texture_model.field.processing_mode": "Processing mode",
+    "texture_model.field.row_mode": "By row",
+    "texture_model.field.pixel_mode": "By pixel",
+    "texture_model.field.voxel_size": "Voxel Size",
+    "texture_model.field.alpha_threshold": "Alpha Threshold",
+    "texture_model.field.include_transparent": "Include transparent pixels",
+    "texture_model.field.center_model": "Center model",
+    "texture_model.field.group_name": "Group Name",
+    "texture_model.section.advanced": "Advanced Settings",
+    "texture_model.field.max_cubes": "Maximum Cube count",
+    "texture_model.note.performance": "A large number of Cubes can significantly affect Blockbench performance.",
+    "texture_model.section.stats": "Statistics",
+    "texture_model.stats.image_dimensions": "Image dimensions",
+    "texture_model.stats.total_pixels": "Total pixels",
+    "texture_model.stats.visible_pixels": "Visible pixels",
+    "texture_model.stats.expected_cubes": "Estimated Cubes",
+    "texture_model.stats.model_dimensions": "Estimated model dimensions",
+    "texture_model.action.preview": "Preview",
+    "texture_model.action.generate": "Generate in Workspace",
+    "texture_model.status.choose_image": "Choose a PNG, JPEG, or WebP image.",
+    "texture_model.status.reading_image": "Reading image\u2026",
+    "texture_model.status.image_loaded": "Image loaded. Click Preview to continue.",
+    "texture_model.status.preview_stale": "Settings changed. Preview again before generating.",
+    "texture_model.status.over_limit": "The image needs %0 Cubes, above the limit of %1.",
+    "texture_model.status.performance_warning": "%0 Cubes may significantly affect Blockbench performance.",
+    "texture_model.status.planning": "Planning model\u2026",
+    "texture_model.status.preview_ready": "Preview ready: %0 Cubes.",
+    "texture_model.status.generated": "Texture Model generated.",
+    "texture_model.status.write_unavailable": "Workspace generation is not available.",
+    "texture_model.preview.aria_label": "Model preview",
+    "texture_model.preview.controls": "Drag to rotate \xB7 Scroll to zoom",
+    "texture_model.preview.empty": "No Cubes to preview",
+    "texture_model.preview.select_image": "Choose a texture to preview",
+    "texture_model.error.image_dimensions": "Image width and height must be positive integers.",
+    "texture_model.error.image_rgba": "Image RGBA data length does not match its dimensions.",
+    "texture_model.error.processing_mode": "Processing mode must be row or pixel.",
+    "texture_model.error.voxel_size": "Voxel Size must be greater than zero.",
+    "texture_model.error.boolean_options": "Transparency and centering settings must be boolean.",
+    "texture_model.error.alpha_threshold": "Alpha Threshold must be an integer from 0 to 255.",
+    "texture_model.error.max_cubes_range": "Maximum Cube count must be between %0 and %1.",
+    "texture_model.error.cube_count": "Cube count must be a nonnegative integer.",
+    "texture_model.error.decoded_data_url": "The decoded image has no usable Data URL.",
+    "texture_model.error.preview_stale": "Preview no longer matches the selected image or settings.",
+    "texture_model.error.preview_transparency_stale": "Preview no longer matches the transparency settings.",
+    "texture_model.error.cube_limit": "The model needs %0 Cubes, above the limit of %1.",
+    "texture_model.error.preview_pixels": "Preview pixel data is stale or invalid.",
+    "texture_model.error.preview_empty_bounds": "Empty preview bounds are invalid.",
+    "texture_model.error.preview_geometry": "Preview geometry is stale or invalid.",
+    "texture_model.error.preview_bounds": "Preview bounds are stale or invalid.",
+    "texture_model.error.open_project": "Open a Blockbench model project before generating.",
+    "texture_model.error.cube_unsupported": "The current project format does not support Cube editing.",
+    "texture_model.error.per_face_uv_unsupported": "The current project format cannot use an independent texture on every Cube face.",
+    "texture_model.error.project_uv_size": "The current project UV dimensions are invalid.",
+    "texture_model.error.uv_size": "The current project has invalid UV dimensions.",
+    "texture_model.error.group_name": "Group name must be text.",
+    "texture_model.error.pixel_batch": "Pixel batch size must be a positive integer.",
+    "texture_model.error.pixel_uv": "Pixel or UV dimensions are invalid.",
+    "texture_model.error.image_type": "Choose a PNG, JPEG, or WebP image.",
+    "texture_model.error.image_read": "Could not read the image file.",
+    "texture_model.error.image_decode": "Could not decode the image.",
+    "texture_model.error.image_size": "The image has invalid dimensions.",
+    "texture_model.error.canvas": "Canvas 2D is unavailable.",
+    "texture_model.error.unexpected": "Operation failed: %0"
+  };
+  var SIMPLIFIED_CHINESE = {
+    "texture_model.plugin.title": "\u7EB9\u7406\u6A21\u578B",
+    "texture_model.plugin.description": "\u5C06\u6240\u9009\u56FE\u7247\u4E2D\u7684\u6BCF\u4E2A\u50CF\u7D20\u751F\u6210\u4E3A\u4E00\u4E2A\u5E26\u7EB9\u7406\u7684\u65B9\u5757\u3002",
+    "texture_model.menu.title": "\u7EB9\u7406\u6A21\u578B",
+    "texture_model.menu.generate": "\u6253\u5F00\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668\u2026",
+    "texture_model.menu.about": "\u5173\u4E8E\u7EB9\u7406\u6A21\u578B",
+    "texture_model.about.title": "\u7EB9\u7406\u6A21\u578B",
+    "texture_model.about.message": "\u7EB9\u7406\u6A21\u578B 0.1.0\n\u5C06\u56FE\u7247\u50CF\u7D20\u8F6C\u6362\u4E3A Blockbench \u4F53\u7D20\u6A21\u578B\u3002",
+    "texture_model.dialog.ok": "\u786E\u5B9A",
+    "texture_model.dialog.title": "\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668",
+    "texture_model.dialog.cancel": "\u53D6\u6D88",
+    "texture_model.section.texture": "\u7EB9\u7406",
+    "texture_model.field.choose_texture": "\u9009\u62E9\u7EB9\u7406",
+    "texture_model.field.no_image": "\u672A\u9009\u62E9\u56FE\u7247",
+    "texture_model.field.thumbnail_alt": "\u7EB9\u7406\u7F29\u7565\u56FE",
+    "texture_model.section.settings": "\u751F\u6210\u8BBE\u7F6E",
+    "texture_model.field.processing_mode": "\u5904\u7406\u65B9\u5F0F",
+    "texture_model.field.row_mode": "\u6309\u884C",
+    "texture_model.field.pixel_mode": "\u6309\u50CF\u7D20",
+    "texture_model.field.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8",
+    "texture_model.field.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C",
+    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
+    "texture_model.field.center_model": "\u5C45\u4E2D\u6A21\u578B",
+    "texture_model.field.group_name": "\u7EC4\u540D\u79F0",
+    "texture_model.section.advanced": "\u9AD8\u7EA7\u8BBE\u7F6E",
+    "texture_model.field.max_cubes": "\u6700\u5927 Cube \u6570\u91CF",
+    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
+    "texture_model.section.stats": "\u7EDF\u8BA1\u4FE1\u606F",
+    "texture_model.stats.image_dimensions": "\u56FE\u7247\u5C3A\u5BF8",
+    "texture_model.stats.total_pixels": "\u603B\u50CF\u7D20\u6570",
+    "texture_model.stats.visible_pixels": "\u53EF\u89C1\u50CF\u7D20\u6570",
+    "texture_model.stats.expected_cubes": "\u9884\u8BA1 Cube \u6570\u91CF",
+    "texture_model.stats.model_dimensions": "\u9884\u8BA1\u6A21\u578B\u5C3A\u5BF8",
+    "texture_model.action.preview": "\u9884\u89C8",
+    "texture_model.action.generate": "\u751F\u6210\u5230\u5DE5\u4F5C\u533A",
+    "texture_model.status.choose_image": "\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u56FE\u7247\u3002",
+    "texture_model.status.reading_image": "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026",
+    "texture_model.status.image_loaded": "\u56FE\u7247\u5DF2\u52A0\u8F7D\uFF0C\u8BF7\u70B9\u51FB\u201C\u9884\u89C8\u201D\u7EE7\u7EED\u3002",
+    "texture_model.status.preview_stale": "\u914D\u7F6E\u5DF2\u66F4\u6539\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u518D\u751F\u6210\u3002",
+    "texture_model.status.over_limit": "\u9700\u8981\u751F\u6210 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
+    "texture_model.status.performance_warning": "%0 \u4E2A Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
+    "texture_model.status.planning": "\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026",
+    "texture_model.status.preview_ready": "\u9884\u89C8\u5C31\u7EEA\uFF1A%0 \u4E2A Cube\u3002",
+    "texture_model.status.generated": "\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210\u3002",
+    "texture_model.status.write_unavailable": "\u5F53\u524D\u65E0\u6CD5\u5199\u5165\u5DE5\u4F5C\u533A\u3002",
+    "texture_model.preview.aria_label": "\u6A21\u578B\u9884\u89C8",
+    "texture_model.preview.controls": "\u62D6\u52A8\u65CB\u8F6C \xB7 \u6EDA\u8F6E\u7F29\u653E",
+    "texture_model.preview.empty": "\u6CA1\u6709\u53EF\u9884\u89C8\u7684 Cube",
+    "texture_model.preview.select_image": "\u9009\u62E9\u7EB9\u7406\u4EE5\u9884\u89C8\u6A21\u578B",
+    "texture_model.error.image_dimensions": "\u56FE\u7247\u5BBD\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
+    "texture_model.error.image_rgba": "\u56FE\u7247 RGBA \u6570\u636E\u957F\u5EA6\u4E0E\u5C3A\u5BF8\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.processing_mode": "\u5904\u7406\u65B9\u5F0F\u5FC5\u987B\u4E3A\u6309\u884C\u6216\u6309\u50CF\u7D20\u3002",
+    "texture_model.error.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8\u5FC5\u987B\u5927\u4E8E\u96F6\u3002",
+    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u5C45\u4E2D\u9009\u9879\u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002",
+    "texture_model.error.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C\u5FC5\u987B\u4E3A 0 \u5230 255 \u4E4B\u95F4\u7684\u6574\u6570\u3002",
+    "texture_model.error.max_cubes_range": "\u6700\u5927 Cube \u6570\u91CF\u5FC5\u987B\u5728 %0 \u5230 %1 \u4E4B\u95F4\u3002",
+    "texture_model.error.cube_count": "Cube \u6570\u91CF\u5FC5\u987B\u4E3A\u975E\u8D1F\u6574\u6570\u3002",
+    "texture_model.error.decoded_data_url": "\u89E3\u7801\u540E\u7684\u56FE\u7247\u6CA1\u6709\u53EF\u7528\u7684 Data URL\u3002",
+    "texture_model.error.preview_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u56FE\u7247\u6216\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.preview_transparency_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u900F\u660E\u5EA6\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
+    "texture_model.error.preview_pixels": "\u9884\u89C8\u50CF\u7D20\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.preview_empty_bounds": "\u7A7A\u9884\u89C8\u7684\u8FB9\u754C\u6570\u636E\u65E0\u6548\u3002",
+    "texture_model.error.preview_geometry": "\u9884\u89C8\u51E0\u4F55\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.preview_bounds": "\u9884\u89C8\u8FB9\u754C\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.open_project": "\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Blockbench \u6A21\u578B\u9879\u76EE\u3002",
+    "texture_model.error.cube_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u7F16\u8F91 Cube\u3002",
+    "texture_model.error.per_face_uv_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u4E3A\u6BCF\u4E2A Cube \u9762\u5355\u72EC\u6307\u5B9A\u7EB9\u7406\u3002",
+    "texture_model.error.project_uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.group_name": "\u7EC4\u540D\u79F0\u5FC5\u987B\u4E3A\u6587\u672C\u3002",
+    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
+    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.image_type": "\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u56FE\u7247\u3002",
+    "texture_model.error.image_read": "\u65E0\u6CD5\u8BFB\u53D6\u56FE\u7247\u6587\u4EF6\u3002",
+    "texture_model.error.image_decode": "\u65E0\u6CD5\u89E3\u7801\u56FE\u7247\u3002",
+    "texture_model.error.image_size": "\u56FE\u7247\u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.canvas": "\u5F53\u524D\u73AF\u5883\u65E0\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
+    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u8D25\uFF1A%0"
+  };
+  var TRADITIONAL_CHINESE = {
+    "texture_model.plugin.title": "\u7D0B\u7406\u6A21\u578B",
+    "texture_model.plugin.description": "\u5C07\u6240\u9078\u5716\u7247\u4E2D\u7684\u6BCF\u500B\u50CF\u7D20\u8F49\u63DB\u70BA\u4E00\u500B\u5E36\u7D0B\u7406\u7684\u65B9\u584A\u3002",
+    "texture_model.menu.title": "\u7D0B\u7406\u6A21\u578B",
+    "texture_model.menu.generate": "\u958B\u555F\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668\u2026",
+    "texture_model.menu.about": "\u95DC\u65BC\u7D0B\u7406\u6A21\u578B",
+    "texture_model.about.title": "\u7D0B\u7406\u6A21\u578B",
+    "texture_model.about.message": "\u7D0B\u7406\u6A21\u578B 0.1.0\n\u5C07\u5716\u7247\u50CF\u7D20\u8F49\u63DB\u70BA Blockbench \u9AD4\u7D20\u6A21\u578B\u3002",
+    "texture_model.dialog.ok": "\u78BA\u5B9A",
+    "texture_model.dialog.title": "\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668",
+    "texture_model.dialog.cancel": "\u53D6\u6D88",
+    "texture_model.section.texture": "\u7D0B\u7406",
+    "texture_model.field.choose_texture": "\u9078\u64C7\u7D0B\u7406",
+    "texture_model.field.no_image": "\u672A\u9078\u64C7\u5716\u7247",
+    "texture_model.field.thumbnail_alt": "\u7D0B\u7406\u7E2E\u5716",
+    "texture_model.section.settings": "\u7522\u751F\u8A2D\u5B9A",
+    "texture_model.field.processing_mode": "\u8655\u7406\u65B9\u5F0F",
+    "texture_model.field.row_mode": "\u4F9D\u5217\u8655\u7406",
+    "texture_model.field.pixel_mode": "\u4F9D\u50CF\u7D20\u8655\u7406",
+    "texture_model.field.voxel_size": "\u9AD4\u7D20\u5927\u5C0F",
+    "texture_model.field.alpha_threshold": "Alpha \u95BE\u503C",
+    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
+    "texture_model.field.center_model": "\u6A21\u578B\u7F6E\u4E2D",
+    "texture_model.field.group_name": "\u7FA4\u7D44\u540D\u7A31",
+    "texture_model.section.advanced": "\u9032\u968E\u8A2D\u5B9A",
+    "texture_model.field.max_cubes": "Cube \u6578\u91CF\u4E0A\u9650",
+    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
+    "texture_model.section.stats": "\u7D71\u8A08\u8CC7\u6599",
+    "texture_model.stats.image_dimensions": "\u5716\u7247\u5C3A\u5BF8",
+    "texture_model.stats.total_pixels": "\u50CF\u7D20\u7E3D\u6578",
+    "texture_model.stats.visible_pixels": "\u53EF\u898B\u50CF\u7D20\u6578",
+    "texture_model.stats.expected_cubes": "\u9810\u8A08 Cube \u6578\u91CF",
+    "texture_model.stats.model_dimensions": "\u9810\u8A08\u6A21\u578B\u5C3A\u5BF8",
+    "texture_model.action.preview": "\u9810\u89BD",
+    "texture_model.action.generate": "\u7522\u751F\u5230\u5DE5\u4F5C\u5340",
+    "texture_model.status.choose_image": "\u8ACB\u9078\u64C7 PNG\u3001JPEG \u6216 WebP \u5716\u7247\u3002",
+    "texture_model.status.reading_image": "\u6B63\u5728\u8B80\u53D6\u5716\u7247\u2026",
+    "texture_model.status.image_loaded": "\u5716\u7247\u5DF2\u8F09\u5165\uFF0C\u8ACB\u9EDE\u64CA\u300C\u9810\u89BD\u300D\u7E7C\u7E8C\u3002",
+    "texture_model.status.preview_stale": "\u8A2D\u5B9A\u5DF2\u8B8A\u66F4\uFF0C\u8ACB\u91CD\u65B0\u9810\u89BD\u5F8C\u518D\u7522\u751F\u3002",
+    "texture_model.status.over_limit": "\u9700\u8981\u7522\u751F %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
+    "texture_model.status.performance_warning": "%0 \u500B Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
+    "texture_model.status.planning": "\u6B63\u5728\u898F\u5283\u6A21\u578B\u2026",
+    "texture_model.status.preview_ready": "\u9810\u89BD\u5C31\u7DD2\uFF1A%0 \u500B Cube\u3002",
+    "texture_model.status.generated": "\u7D0B\u7406\u6A21\u578B\u5DF2\u7522\u751F\u3002",
+    "texture_model.status.write_unavailable": "\u76EE\u524D\u7121\u6CD5\u5BEB\u5165\u5DE5\u4F5C\u5340\u3002",
+    "texture_model.preview.aria_label": "\u6A21\u578B\u9810\u89BD",
+    "texture_model.preview.controls": "\u62D6\u66F3\u65CB\u8F49 \xB7 \u6EFE\u8F2A\u7E2E\u653E",
+    "texture_model.preview.empty": "\u6C92\u6709\u53EF\u9810\u89BD\u7684 Cube",
+    "texture_model.preview.select_image": "\u9078\u64C7\u7D0B\u7406\u4EE5\u9810\u89BD\u6A21\u578B",
+    "texture_model.error.image_dimensions": "\u5716\u7247\u5BEC\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
+    "texture_model.error.image_rgba": "\u5716\u7247 RGBA \u8CC7\u6599\u9577\u5EA6\u8207\u5C3A\u5BF8\u4E0D\u7B26\u3002",
+    "texture_model.error.processing_mode": "\u8655\u7406\u65B9\u5F0F\u5FC5\u9808\u70BA\u4F9D\u5217\u6216\u4F9D\u50CF\u7D20\u3002",
+    "texture_model.error.voxel_size": "\u9AD4\u7D20\u5927\u5C0F\u5FC5\u9808\u5927\u65BC\u96F6\u3002",
+    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u7F6E\u4E2D\u9078\u9805\u5FC5\u9808\u70BA\u5E03\u6797\u503C\u3002",
+    "texture_model.error.alpha_threshold": "Alpha \u95BE\u503C\u5FC5\u9808\u70BA 0 \u5230 255 \u4E4B\u9593\u7684\u6574\u6578\u3002",
+    "texture_model.error.max_cubes_range": "Cube \u6578\u91CF\u4E0A\u9650\u5FC5\u9808\u4ECB\u65BC %0 \u5230 %1\u3002",
+    "texture_model.error.cube_count": "Cube \u6578\u91CF\u5FC5\u9808\u70BA\u975E\u8CA0\u6574\u6578\u3002",
+    "texture_model.error.decoded_data_url": "\u89E3\u78BC\u5F8C\u7684\u5716\u7247\u6C92\u6709\u53EF\u7528\u7684 Data URL\u3002",
+    "texture_model.error.preview_stale": "\u9810\u89BD\u8207\u76EE\u524D\u5716\u7247\u6216\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
+    "texture_model.error.preview_transparency_stale": "\u9810\u89BD\u8207\u76EE\u524D\u900F\u660E\u5EA6\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
+    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
+    "texture_model.error.preview_pixels": "\u9810\u89BD\u50CF\u7D20\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.preview_empty_bounds": "\u7A7A\u9810\u89BD\u7684\u908A\u754C\u8CC7\u6599\u7121\u6548\u3002",
+    "texture_model.error.preview_geometry": "\u9810\u89BD\u5E7E\u4F55\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.preview_bounds": "\u9810\u89BD\u908A\u754C\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.open_project": "\u8ACB\u5148\u958B\u555F Blockbench \u6A21\u578B\u5C08\u6848\u3002",
+    "texture_model.error.cube_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u7DE8\u8F2F Cube\u3002",
+    "texture_model.error.per_face_uv_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u70BA\u6BCF\u500B Cube \u9762\u500B\u5225\u6307\u5B9A\u7D0B\u7406\u3002",
+    "texture_model.error.project_uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.group_name": "\u7FA4\u7D44\u540D\u7A31\u5FC5\u9808\u70BA\u6587\u5B57\u3002",
+    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
+    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.image_type": "\u8ACB\u9078\u64C7 PNG\u3001JPEG \u6216 WebP \u5716\u7247\u3002",
+    "texture_model.error.image_read": "\u7121\u6CD5\u8B80\u53D6\u5716\u7247\u6A94\u6848\u3002",
+    "texture_model.error.image_decode": "\u7121\u6CD5\u89E3\u78BC\u5716\u7247\u3002",
+    "texture_model.error.image_size": "\u5716\u7247\u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.canvas": "\u76EE\u524D\u74B0\u5883\u7121\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
+    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u6557\uFF1A%0"
+  };
+  function registerTranslations() {
+    Language.addTranslations("en", ENGLISH);
+    Language.addTranslations("zh", SIMPLIFIED_CHINESE);
+    Language.addTranslations("zh_tw", TRADITIONAL_CHINESE);
+  }
+  function tr(key, variables) {
+    const fullKey = key.startsWith("texture_model.") ? key : "texture_model." + key;
+    return tl(fullKey, variables, ENGLISH[fullKey] ?? fullKey);
+  }
+  function errorMessage(error) {
+    if (error instanceof ModelValidationError) {
+      const variables = error.translationVariables.length > 0 ? error.translationVariables : error.translationKey === "error.unexpected" ? [error.message] : void 0;
+      return tr(error.translationKey, variables);
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    return tr("error.unexpected", [detail]);
   }
 
   // src/domain/cancellation.ts
@@ -469,7 +765,7 @@
     const inferred = extension === "png" ? "image/png" : extension === "jpg" || extension === "jpeg" ? "image/jpeg" : extension === "webp" ? "image/webp" : "";
     const mimeType = declared || inferred;
     if (!SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
-      throw new ModelValidationError("Choose a PNG, JPEG, or WebP image.");
+      throw new ModelValidationError("Choose a PNG, JPEG, or WebP image.", "error.image_type");
     }
     return mimeType;
   }
@@ -491,9 +787,9 @@
       };
       reader.onload = () => {
         if (typeof reader.result === "string") finish(reader.result);
-        else finish(new ModelValidationError("Could not read the image file."));
+        else finish(new ModelValidationError("Could not read the image file.", "error.image_read"));
       };
-      reader.onerror = () => finish(new ModelValidationError("Could not read the image file."));
+      reader.onerror = () => finish(new ModelValidationError("Could not read the image file.", "error.image_read"));
       reader.onabort = () => finish(new TaskCancelledError());
       unsubscribe = token?.onCancel(() => {
         reader.abort();
@@ -503,7 +799,7 @@
       try {
         reader.readAsDataURL(file);
       } catch {
-        finish(new ModelValidationError("Could not read the image file."));
+        finish(new ModelValidationError("Could not read the image file.", "error.image_read"));
       }
     });
   }
@@ -523,7 +819,7 @@
         else resolve(image);
       };
       image.onload = () => finish();
-      image.onerror = () => finish(new ModelValidationError("Could not decode the image."));
+      image.onerror = () => finish(new ModelValidationError("Could not decode the image.", "error.image_decode"));
       unsubscribe = token?.onCancel(() => {
         image.src = "";
         finish(new TaskCancelledError());
@@ -538,13 +834,13 @@
     const image = await loadImage(dataURL, token);
     token?.throwIfCancelled();
     if (!Number.isSafeInteger(image.naturalWidth) || image.naturalWidth < 1 || !Number.isSafeInteger(image.naturalHeight) || image.naturalHeight < 1) {
-      throw new ModelValidationError("The image has invalid dimensions.");
+      throw new ModelValidationError("The image has invalid dimensions.", "error.image_size");
     }
     const canvas = document.createElement("canvas");
     canvas.width = image.naturalWidth;
     canvas.height = image.naturalHeight;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) throw new ModelValidationError("Canvas 2D is unavailable.");
+    if (!context) throw new ModelValidationError("Canvas 2D is unavailable.", "error.canvas");
     context.drawImage(image, 0, 0);
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
     token?.throwIfCancelled();
@@ -840,7 +1136,11 @@ ${fragmentMarker}`);
       this.context.font = "14px sans-serif";
       this.context.textAlign = "center";
       this.context.textBaseline = "middle";
-      this.context.fillText(this.plan ? "\u6CA1\u6709\u53EF\u9884\u89C8\u7684 Cube" : "\u9009\u62E9\u7EB9\u7406\u540E\u9884\u89C8", this.width / 2, this.height / 2);
+      this.context.fillText(
+        tr(this.plan ? "preview.empty" : "preview.select_image"),
+        this.width / 2,
+        this.height / 2
+      );
     }
     drawCanvasFallback(plan) {
       const centerX = (plan.bounds.min[0] + plan.bounds.max[0]) / 2;
@@ -916,43 +1216,45 @@ ${fragmentMarker}`);
   };
 
   // src/ui/generator_dialog.ts
-  var markup = [
-    '<div class="texture-model-shell"><div class="texture-model-columns">',
-    '<div class="texture-model-controls">',
-    "<section><h3>\u7EB9\u7406</h3>",
-    '<label class="texture-model-file">\u9009\u62E9\u7EB9\u7406 <input data-field="file" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label>',
-    '<span data-output="filename">\u672A\u9009\u62E9\u56FE\u7247</span>',
-    '<img data-output="thumbnail" class="texture-model-thumbnail" alt="\u7EB9\u7406\u7F29\u7565\u56FE" hidden></section>',
-    "<section><h3>\u751F\u6210\u8BBE\u7F6E</h3>",
-    '<label>\u5904\u7406\u65B9\u5F0F <select data-field="processingMode"><option value="row">\u6309\u884C</option><option value="pixel">\u6309\u50CF\u7D20</option></select></label>',
-    '<label>Voxel Size <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1"></label>',
-    '<label>Alpha Threshold <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0"></label>',
-    '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> \u5305\u542B\u900F\u660E\u50CF\u7D20</label>',
-    '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> \u5C45\u4E2D\u6A21\u578B</label>',
-    '<label>Group Name <input data-field="groupName" type="text" value="texture_model"></label>',
-    "<details><summary>\u9AD8\u7EA7\u8BBE\u7F6E</summary>",
-    '<label>\u6700\u5927 Cube \u6570 <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000"></label>',
-    "<small>\u5927\u91CF Cube \u4F1A\u4E25\u91CD\u5F71\u54CD Blockbench \u6027\u80FD\u3002</small></details></section>",
-    '<section class="texture-model-stats"><h3>\u7EDF\u8BA1</h3>',
-    '<div>\u56FE\u7247\u5C3A\u5BF8 <strong data-output="dimensions">\u2014</strong></div>',
-    '<div>\u603B\u50CF\u7D20\u6570 <strong data-output="totalPixels">\u2014</strong></div>',
-    '<div>\u53EF\u89C1\u50CF\u7D20\u6570 <strong data-output="visiblePixels">\u2014</strong></div>',
-    '<div>\u9884\u8BA1 Cube \u6570 <strong data-output="voxelCount">\u2014</strong></div>',
-    '<div>\u9884\u8BA1\u6A21\u578B\u5C3A\u5BF8 <strong data-output="modelSize">\u2014</strong></div></section>',
-    '<p class="texture-model-status" data-output="status" role="status">\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u56FE\u7247\u3002</p>',
-    '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>\u9884\u89C8</button>',
-    '<button type="button" data-action="generate" disabled>\u751F\u6210\u5230\u5DE5\u4F5C\u533A</button></div>',
-    '</div><div class="texture-model-preview-wrap">',
-    '<canvas data-output="preview" class="texture-model-preview" aria-label="\u6A21\u578B\u9884\u89C8"></canvas>',
-    "<p>\u62D6\u52A8\u65CB\u8F6C \xB7 \u6EDA\u8F6E\u7F29\u653E</p></div></div></div>"
-  ].join("");
+  function buildMarkup() {
+    return [
+      '<div class="texture-model-shell"><div class="texture-model-columns">',
+      '<div class="texture-model-controls">',
+      "<section><h3>" + tr("section.texture") + "</h3>",
+      '<label class="texture-model-file">' + tr("field.choose_texture") + ' <input data-field="file" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label>',
+      '<span data-output="filename">' + tr("field.no_image") + "</span>",
+      '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr("field.thumbnail_alt") + '" hidden></section>',
+      "<section><h3>" + tr("section.settings") + "</h3>",
+      "<label>" + tr("field.processing_mode") + ' <select data-field="processingMode"><option value="row">' + tr("field.row_mode") + '</option><option value="pixel">' + tr("field.pixel_mode") + "</option></select></label>",
+      "<label>" + tr("field.voxel_size") + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1"></label>',
+      "<label>" + tr("field.alpha_threshold") + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0"></label>',
+      '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr("field.include_transparent") + "</label>",
+      '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr("field.center_model") + "</label>",
+      "<label>" + tr("field.group_name") + ' <input data-field="groupName" type="text" value="texture_model"></label>',
+      "<details><summary>" + tr("section.advanced") + "</summary>",
+      "<label>" + tr("field.max_cubes") + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000"></label>',
+      "<small>" + tr("note.performance") + "</small></details></section>",
+      '<section class="texture-model-stats"><h3>' + tr("section.stats") + "</h3>",
+      "<div>" + tr("stats.image_dimensions") + ' <strong data-output="dimensions">\u2014</strong></div>',
+      "<div>" + tr("stats.total_pixels") + ' <strong data-output="totalPixels">\u2014</strong></div>',
+      "<div>" + tr("stats.visible_pixels") + ' <strong data-output="visiblePixels">\u2014</strong></div>',
+      "<div>" + tr("stats.expected_cubes") + ' <strong data-output="voxelCount">\u2014</strong></div>',
+      "<div>" + tr("stats.model_dimensions") + ' <strong data-output="modelSize">\u2014</strong></div></section>',
+      '<p class="texture-model-status" data-output="status" role="status">' + tr("status.choose_image") + "</p>",
+      '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr("action.preview") + "</button>",
+      '<button type="button" data-action="generate" disabled>' + tr("action.generate") + "</button></div>",
+      '</div><div class="texture-model-preview-wrap">',
+      '<canvas data-output="preview" class="texture-model-preview" aria-label="' + tr("preview.aria_label") + '"></canvas>',
+      "<p>" + tr("preview.controls") + "</p></div></div></div>"
+    ].join("");
+  }
   function required(root, selector) {
     const element = root.querySelector(selector);
     if (!element) throw new Error("Generator control is missing: " + selector);
     return element;
   }
   function messageOf(error) {
-    return error instanceof Error ? error.message : String(error);
+    return errorMessage(error);
   }
   var GeneratorController = class {
     constructor(dialog, onGenerate) {
@@ -1021,12 +1323,12 @@ ${fragmentMarker}`);
       const thumbnail = this.output("thumbnail");
       thumbnail.hidden = true;
       thumbnail.removeAttribute("src");
-      this.output("filename").textContent = file?.name ?? "\u672A\u9009\u62E9\u56FE\u7247";
+      this.output("filename").textContent = file?.name ?? tr("field.no_image");
       this.updateState();
       if (!file) return;
       const token = this.replaceTask();
       const revision = this.revision;
-      this.setStatus("\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026");
+      this.setStatus(tr("status.reading_image"));
       try {
         const image = await decodeImageFile(file, token);
         if (token.cancelled || revision !== this.revision) return;
@@ -1035,7 +1337,7 @@ ${fragmentMarker}`);
         this.field("groupName").value = defaultGroupName(image.fileName);
         thumbnail.src = image.dataURL;
         thumbnail.hidden = false;
-        this.setStatus("\u56FE\u7247\u5DF2\u52A0\u8F7D\u3002\u8BF7\u70B9\u51FB\u9884\u89C8\u3002");
+        this.setStatus(tr("status.image_loaded"));
         this.updateState();
       } catch (error) {
         if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), "error");
@@ -1091,11 +1393,11 @@ ${fragmentMarker}`);
         previewButton.disabled = limit === "exceeded";
         generateButton.disabled = limit === "exceeded" || !this.plan || this.previewRevision !== this.revision;
         if (limit === "exceeded") {
-          this.setStatus("\u9884\u8BA1 " + counts.voxelCount + " \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 " + options.maxVoxels + "\u3002", "error");
+          this.setStatus(tr("status.over_limit", [counts.voxelCount, options.maxVoxels]), "error");
         } else if (limit === "warning") {
-          this.setStatus("\u9884\u8BA1 " + counts.voxelCount + " \u4E2A Cube\uFF1B\u5927\u91CF Cube \u4F1A\u4E25\u91CD\u5F71\u54CD Blockbench \u6027\u80FD\u3002", "warning");
+          this.setStatus(tr("status.performance_warning", [counts.voxelCount]), "warning");
         } else if (this.previewRevision !== this.revision) {
-          this.setStatus("\u914D\u7F6E\u5DF2\u66F4\u6539\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u3002");
+          this.setStatus(tr("status.preview_stale"));
         }
       } catch (error) {
         previewButton.disabled = true;
@@ -1123,7 +1425,7 @@ ${fragmentMarker}`);
       const token = this.replaceTask();
       const revision = this.revision;
       let lastPercent = -1;
-      this.setStatus("\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026");
+      this.setStatus(tr("status.planning"));
       try {
         const plan = await planModel(image, options, {
           token,
@@ -1131,7 +1433,7 @@ ${fragmentMarker}`);
             const percent = Math.round(processed / total * 100);
             if (!token.cancelled && percent !== lastPercent) {
               lastPercent = percent;
-              this.setStatus("\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026 " + percent + "%");
+              this.setStatus(tr("status.planning") + " " + percent + "%");
             }
           }
         });
@@ -1142,7 +1444,7 @@ ${fragmentMarker}`);
         this.previewRevision = revision;
         this.updateState();
         if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === "ok") {
-          this.setStatus("\u9884\u89C8\u5C31\u7EEA\uFF1A" + plan.voxelCount + " \u4E2A Cube\u3002");
+          this.setStatus(tr("status.preview_ready", [plan.voxelCount]));
         }
       } catch (error) {
         this.renderer?.dispose();
@@ -1156,7 +1458,7 @@ ${fragmentMarker}`);
         const options = this.options();
         if (getVoxelLimitStatus(this.plan.voxelCount, options.maxVoxels) === "exceeded") return;
         if (!this.onGenerate) {
-          this.setStatus("\u5DE5\u4F5C\u533A\u5199\u5165\u5C06\u5728\u4E0B\u4E00\u9636\u6BB5\u63A5\u5165\u3002");
+          this.setStatus(tr("status.write_unavailable"));
           return;
         }
         this.onGenerate(this.image, this.plan, options);
@@ -1182,14 +1484,14 @@ ${fragmentMarker}`);
   function createGeneratorDialog(onGenerate) {
     let controller;
     const content = document.createElement("div");
-    content.innerHTML = markup;
+    content.innerHTML = buildMarkup();
     const dialog = new Dialog({
       id: "texture_model_generator",
-      title: "\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668",
+      title: tr("dialog.title"),
       width: 920,
       resizable: "xy",
       lines: [content],
-      buttons: ["\u53D6\u6D88"],
+      buttons: [tr("dialog.cancel")],
       onOpen() {
         controller?.dispose();
         controller = new GeneratorController(dialog, onGenerate);
@@ -1248,10 +1550,11 @@ ${fragmentMarker}`);
   var aboutAction;
   var textureMenu;
   var style;
+  registerTranslations();
   BBPlugin.register("texture_model", {
-    title: "Texture Model",
+    title: tr("plugin.title"),
     author: "TODO: set plugin author",
-    description: "Generate one textured cube for each selected image pixel.",
+    description: tr("plugin.description"),
     icon: "view_in_ar",
     version: "0.1.0",
     variant: "both",
@@ -1259,29 +1562,29 @@ ${fragmentMarker}`);
     onload() {
       style = Blockbench.addCSS(pluginStyles);
       generatorAction = new Action("texture_model_open_generator", {
-        name: "\u6253\u5F00\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668\u2026",
+        name: tr("menu.generate"),
         icon: "image",
         click() {
           generatorDialog ?? (generatorDialog = createGeneratorDialog((image, plan, options) => {
             writeModel(image, plan, options);
-            Blockbench.showQuickMessage("\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210");
+            Blockbench.showQuickMessage(tr("status.generated"));
           }));
           generatorDialog.dialog.show();
         }
       });
       aboutAction = new Action("texture_model_about", {
-        name: "\u5173\u4E8E\u63D2\u4EF6",
+        name: tr("menu.about"),
         icon: "info",
         click() {
           Blockbench.showMessageBox({
-            title: "\u7EB9\u7406\u6A21\u578B",
-            message: "Texture Model 0.1.0\n\u5C06\u56FE\u7247\u50CF\u7D20\u8F6C\u6362\u4E3A Blockbench \u4F53\u7D20\u6A21\u578B\u3002",
-            buttons: ["\u786E\u5B9A"]
+            title: tr("about.title"),
+            message: tr("about.message"),
+            buttons: [tr("dialog.ok")]
           });
         }
       });
       textureMenu = new BarMenu("texture_model_menu", [generatorAction, aboutAction], {
-        name: "\u7EB9\u7406\u6A21\u578B",
+        name: tr("menu.title"),
         icon: "view_in_ar"
       });
       MenuBar.addMenu(textureMenu, "tools");
