@@ -62,6 +62,8 @@
   }
 
   // src/domain/model_planner.ts
+  var ROW_BATCH_MAX_ROWS = 256;
+  var ROW_BATCH_MAX_PIXELS = 2048;
   function nextUIFrame() {
     return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
   }
@@ -99,7 +101,10 @@
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
+    let rowsSinceYield = 0;
+    let pixelsAtLastRowYield = 0;
     for (let sourceY = 0; sourceY < image.height; sourceY += 1) {
+      task.token?.throwIfCancelled();
       for (let sourceX = 0; sourceX < image.width; sourceX += 1) {
         const offset = (sourceY * image.width + sourceX) * 4;
         const alpha = image.data[offset + 3] ?? 0;
@@ -132,9 +137,14 @@
         }
       }
       if (options.processingMode === "row") {
-        task.onProgress?.(processedPixels, totalPixels);
-        await yieldToUI();
-        task.token?.throwIfCancelled();
+        rowsSinceYield += 1;
+        if (rowsSinceYield >= ROW_BATCH_MAX_ROWS || processedPixels - pixelsAtLastRowYield >= ROW_BATCH_MAX_PIXELS || sourceY === image.height - 1) {
+          task.onProgress?.(processedPixels, totalPixels);
+          await yieldToUI();
+          task.token?.throwIfCancelled();
+          rowsSinceYield = 0;
+          pixelsAtLastRowYield = processedPixels;
+        }
       }
     }
     if (options.processingMode === "pixel" && processedPixels % batchSize !== 0) {
@@ -311,7 +321,7 @@
       }
     }
   }
-  function preflightFormat() {
+  function preflightFormat(image) {
     if (typeof Project === "undefined" || !Project || typeof Format === "undefined" || !Format) {
       throw new ModelValidationError("Open a Blockbench model project before generating.");
     }
@@ -326,6 +336,11 @@
     if (!Format.per_texture_uv_size && (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 || !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
       throw new ModelValidationError("The current project UV dimensions are invalid.");
     }
+    const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
+    const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
+    if (!Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0) {
+      throw new ModelValidationError("The current project has invalid UV dimensions.");
+    }
   }
   function cubeFaces(uv, texture) {
     const faces = {};
@@ -334,14 +349,14 @@
     }
     return faces;
   }
-  function makeCube(voxel, size, texture, image) {
+  function makeCube(voxel, size, texture, image, uvWidth, uvHeight) {
     const uv = pixelToUVRect(
       voxel.sourceX,
       voxel.sourceY,
       image.width,
       image.height,
-      texture.getUVWidth(),
-      texture.getUVHeight()
+      uvWidth,
+      uvHeight
     );
     return new Cube({
       name: `px_${voxel.sourceX}_${voxel.sourceY}`,
@@ -354,7 +369,7 @@
   }
   function writeModel(image, plan, options) {
     validatePlan(image, plan, options);
-    preflightFormat();
+    preflightFormat(image);
     if (typeof options.groupName !== "string") {
       throw new ModelValidationError("Group name must be text.");
     }
@@ -370,18 +385,16 @@
     Undo.initEdit(aspects);
     try {
       const texture = writeTexture(image, (created) => aspects.textures?.push(created));
+      const uvWidth = texture.getUVWidth();
+      const uvHeight = texture.getUVHeight();
       const group = new Group({ name: groupName });
       aspects.groups?.push(group);
       group.addTo("root").init();
       for (const voxel of plan.voxels) {
-        const cube = makeCube(voxel, plan.voxelSize, texture, image);
+        const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
         aspects.elements?.push(cube);
         cube.addTo(group).init();
       }
-      Canvas.updateView({
-        elements: aspects.elements,
-        element_aspects: { faces: true, uv: true }
-      });
       Undo.finishEdit("Generate Texture Model", aspects);
     } catch (error) {
       Undo.cancelEdit(true);
@@ -422,6 +435,31 @@
       return () => this.listeners.delete(listener);
     }
   };
+
+  // src/domain/alpha_histogram.ts
+  function buildAlphaHistogram(image) {
+    validatePixelImage(image);
+    const bins = new Uint32Array(256);
+    for (let index = 3; index < image.data.length; index += 4) {
+      const alpha = image.data[index] ?? 0;
+      bins[alpha] = (bins[alpha] ?? 0) + 1;
+    }
+    const totalPixels = image.width * image.height;
+    return { bins, totalPixels, visiblePixels: totalPixels - (bins[0] ?? 0) };
+  }
+  function countFromAlphaHistogram(histogram, alphaThreshold, includeTransparent) {
+    validateAlphaThreshold(alphaThreshold);
+    let eligiblePixels = 0;
+    for (let alpha = alphaThreshold + 1; alpha < 256; alpha += 1) {
+      eligiblePixels += histogram.bins[alpha] ?? 0;
+    }
+    return {
+      totalPixels: histogram.totalPixels,
+      visiblePixels: histogram.visiblePixels,
+      eligiblePixels,
+      voxelCount: includeTransparent ? histogram.totalPixels : eligiblePixels
+    };
+  }
 
   // src/domain/image_decoder.ts
   function supportedMimeType(file) {
@@ -979,6 +1017,7 @@ ${fragmentMarker}`);
       const file = this.field("file").files?.[0];
       this.invalidate();
       this.image = void 0;
+      this.alphaHistogram = void 0;
       const thumbnail = this.output("thumbnail");
       thumbnail.hidden = true;
       thumbnail.removeAttribute("src");
@@ -992,6 +1031,7 @@ ${fragmentMarker}`);
         const image = await decodeImageFile(file, token);
         if (token.cancelled || revision !== this.revision) return;
         this.image = image;
+        this.alphaHistogram = buildAlphaHistogram(image);
         this.field("groupName").value = defaultGroupName(image.fileName);
         thumbnail.src = image.dataURL;
         thumbnail.hidden = false;
@@ -1023,7 +1063,7 @@ ${fragmentMarker}`);
     updateState() {
       const previewButton = required(this.root, '[data-action="preview"]');
       const generateButton = required(this.root, '[data-action="generate"]');
-      if (!this.image) {
+      if (!this.image || !this.alphaHistogram) {
         for (const name of ["dimensions", "totalPixels", "visiblePixels", "voxelCount", "modelSize"]) {
           this.output(name).textContent = "\u2014";
         }
@@ -1033,7 +1073,11 @@ ${fragmentMarker}`);
       }
       try {
         const options = this.options();
-        const counts = countImagePixels(this.image, options.alphaThreshold, options.includeTransparent);
+        const counts = countFromAlphaHistogram(
+          this.alphaHistogram,
+          options.alphaThreshold,
+          options.includeTransparent
+        );
         this.output("dimensions").textContent = this.image.width + " \xD7 " + this.image.height;
         this.output("totalPixels").textContent = String(counts.totalPixels);
         this.output("visiblePixels").textContent = String(counts.visiblePixels);
@@ -1060,12 +1104,16 @@ ${fragmentMarker}`);
       }
     }
     async preview() {
-      if (!this.image) return;
+      if (!this.image || !this.alphaHistogram) return;
       const image = this.image;
       let options;
       try {
         options = this.options();
-        const count = countImagePixels(image, options.alphaThreshold, options.includeTransparent).voxelCount;
+        const count = countFromAlphaHistogram(
+          this.alphaHistogram,
+          options.alphaThreshold,
+          options.includeTransparent
+        ).voxelCount;
         if (getVoxelLimitStatus(count, options.maxVoxels) === "exceeded") return;
       } catch (error) {
         this.setStatus(messageOf(error), "error");
@@ -1074,13 +1122,16 @@ ${fragmentMarker}`);
       this.invalidate();
       const token = this.replaceTask();
       const revision = this.revision;
+      let lastPercent = -1;
       this.setStatus("\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026");
       try {
         const plan = await planModel(image, options, {
           token,
           onProgress: (processed, total) => {
-            if (!token.cancelled) {
-              this.setStatus("\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026 " + Math.round(processed / total * 100) + "%");
+            const percent = Math.round(processed / total * 100);
+            if (!token.cancelled && percent !== lastPercent) {
+              lastPercent = percent;
+              this.setStatus("\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026 " + percent + "%");
             }
           }
         });
@@ -1094,6 +1145,8 @@ ${fragmentMarker}`);
           this.setStatus("\u9884\u89C8\u5C31\u7EEA\uFF1A" + plan.voxelCount + " \u4E2A Cube\u3002");
         }
       } catch (error) {
+        this.renderer?.dispose();
+        this.renderer = void 0;
         if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), "error");
       }
     }
@@ -1122,6 +1175,7 @@ ${fragmentMarker}`);
       for (const cleanup of this.cleanup) cleanup();
       this.cleanup.length = 0;
       this.image = void 0;
+      this.alphaHistogram = void 0;
       this.plan = void 0;
     }
   };
