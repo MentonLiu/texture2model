@@ -5,7 +5,7 @@
   "description": "Generate a Blockbench voxel model from image pixels",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src tests",
     "test": "vitest run --passWithNoTests",
     "build": "esbuild src/index.ts --bundle --format=iife --platform=browser --target=es2020 --outfile=dist/texture_model.js",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
