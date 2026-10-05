@@ -32,5 +32,9 @@ export default tseslint.config(
         HTMLCanvasElement: 'readonly'
       }
     }
+  },
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { Buffer: 'readonly', URL: 'readonly' } }
   }
 );
