@@ -1181,12 +1181,14 @@ ${fragmentMarker}`);
   };
   function createGeneratorDialog(onGenerate) {
     let controller;
+    const content = document.createElement("div");
+    content.innerHTML = markup;
     const dialog = new Dialog({
       id: "texture_model_generator",
       title: "\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668",
       width: 920,
       resizable: "xy",
-      lines: [markup],
+      lines: [content],
       buttons: ["\u53D6\u6D88"],
       onOpen() {
         controller?.dispose();

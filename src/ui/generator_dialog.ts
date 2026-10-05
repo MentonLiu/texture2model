@@ -294,12 +294,14 @@ class GeneratorController {
 
 export function createGeneratorDialog(onGenerate?: GenerateHandler): GeneratorDialogHandle {
   let controller: GeneratorController | undefined;
+  const content = document.createElement('div');
+  content.innerHTML = markup;
   const dialog = new Dialog({
     id: 'texture_model_generator',
     title: '纹理模型生成器',
     width: 920,
     resizable: 'xy',
-    lines: [markup],
+    lines: [content],
     buttons: ['取消'],
     onOpen() {
       controller?.dispose();
