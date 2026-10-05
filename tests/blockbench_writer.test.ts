@@ -193,7 +193,7 @@ describe('Blockbench model writer', () => {
     expect(aspects.textures).toHaveLength(1);
     expect(aspects.groups).toHaveLength(1);
     expect(aspects.elements).toHaveLength(3);
-    expect(host.canvas.updateView).toHaveBeenCalledTimes(1);
+    expect(host.canvas.updateView).not.toHaveBeenCalled();
 
     const texture = host.MockTexture.all[1];
     expect(texture).toMatchObject({ name: 'sprite_2.png', addedWithUndo: false });

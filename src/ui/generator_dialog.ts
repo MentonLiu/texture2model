@@ -1,6 +1,7 @@
 import { CancellationToken, TaskCancelledError } from '../domain/cancellation';
+import { buildAlphaHistogram, countFromAlphaHistogram, type AlphaHistogram } from '../domain/alpha_histogram';
 import { decodeImageFile } from '../domain/image_decoder';
-import { countImagePixels, planModel } from '../domain/model_planner';
+import { planModel } from '../domain/model_planner';
 import { defaultGroupName } from '../domain/naming';
 import { getVoxelLimitStatus, validateMaxVoxels, validatePlannerOptions } from '../domain/validation';
 import { PreviewRenderer } from '../preview/preview_renderer';
@@ -65,6 +66,7 @@ class GeneratorController {
   private revision = 0;
   private previewRevision = -1;
   private image?: DecodedImage;
+  private alphaHistogram?: AlphaHistogram;
   private plan?: ModelPlan;
   private renderer?: PreviewRenderer;
 
@@ -125,6 +127,7 @@ class GeneratorController {
     const file = this.field<HTMLInputElement>('file').files?.[0];
     this.invalidate();
     this.image = undefined;
+    this.alphaHistogram = undefined;
     const thumbnail = this.output<HTMLImageElement>('thumbnail');
     thumbnail.hidden = true;
     thumbnail.removeAttribute('src');
@@ -138,6 +141,7 @@ class GeneratorController {
       const image = await decodeImageFile(file, token);
       if (token.cancelled || revision !== this.revision) return;
       this.image = image;
+      this.alphaHistogram = buildAlphaHistogram(image);
       this.field<HTMLInputElement>('groupName').value = defaultGroupName(image.fileName);
       thumbnail.src = image.dataURL;
       thumbnail.hidden = false;
@@ -172,7 +176,7 @@ class GeneratorController {
   private updateState(): void {
     const previewButton = required<HTMLButtonElement>(this.root, '[data-action="preview"]');
     const generateButton = required<HTMLButtonElement>(this.root, '[data-action="generate"]');
-    if (!this.image) {
+    if (!this.image || !this.alphaHistogram) {
       for (const name of ['dimensions', 'totalPixels', 'visiblePixels', 'voxelCount', 'modelSize']) {
         this.output(name).textContent = '—';
       }
@@ -182,7 +186,9 @@ class GeneratorController {
     }
     try {
       const options = this.options();
-      const counts = countImagePixels(this.image, options.alphaThreshold, options.includeTransparent);
+      const counts = countFromAlphaHistogram(
+        this.alphaHistogram, options.alphaThreshold, options.includeTransparent
+      );
       this.output('dimensions').textContent = this.image.width + ' × ' + this.image.height;
       this.output('totalPixels').textContent = String(counts.totalPixels);
       this.output('visiblePixels').textContent = String(counts.visiblePixels);
@@ -211,12 +217,14 @@ class GeneratorController {
   }
 
   private async preview(): Promise<void> {
-    if (!this.image) return;
+    if (!this.image || !this.alphaHistogram) return;
     const image = this.image;
     let options: GeneratorOptions;
     try {
       options = this.options();
-      const count = countImagePixels(image, options.alphaThreshold, options.includeTransparent).voxelCount;
+      const count = countFromAlphaHistogram(
+        this.alphaHistogram, options.alphaThreshold, options.includeTransparent
+      ).voxelCount;
       if (getVoxelLimitStatus(count, options.maxVoxels) === 'exceeded') return;
     } catch (error) {
       this.setStatus(messageOf(error), 'error');
@@ -225,13 +233,16 @@ class GeneratorController {
     this.invalidate();
     const token = this.replaceTask();
     const revision = this.revision;
+    let lastPercent = -1;
     this.setStatus('正在规划模型…');
     try {
       const plan = await planModel(image, options, {
         token,
         onProgress: (processed, total) => {
-          if (!token.cancelled) {
-            this.setStatus('正在规划模型… ' + Math.round(processed / total * 100) + '%');
+          const percent = Math.round(processed / total * 100);
+          if (!token.cancelled && percent !== lastPercent) {
+            lastPercent = percent;
+            this.setStatus('正在规划模型… ' + percent + '%');
           }
         }
       });
@@ -245,6 +256,8 @@ class GeneratorController {
         this.setStatus('预览就绪：' + plan.voxelCount + ' 个 Cube。');
       }
     } catch (error) {
+      this.renderer?.dispose();
+      this.renderer = undefined;
       if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), 'error');
     }
   }
@@ -274,6 +287,7 @@ class GeneratorController {
     for (const cleanup of this.cleanup) cleanup();
     this.cleanup.length = 0;
     this.image = undefined;
+    this.alphaHistogram = undefined;
     this.plan = undefined;
   }
 }

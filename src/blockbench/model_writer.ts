@@ -103,7 +103,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   }
 }
 
-function preflightFormat(): void {
+function preflightFormat(image: DecodedImage): void {
   if (typeof Project === 'undefined' || !Project ||
       typeof Format === 'undefined' || !Format) {
     throw new ModelValidationError('Open a Blockbench model project before generating.');
@@ -124,6 +124,12 @@ function preflightFormat(): void {
        !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
     throw new ModelValidationError('The current project UV dimensions are invalid.');
   }
+  const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
+  const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
+  if (!Number.isFinite(uvWidth) || uvWidth <= 0 ||
+      !Number.isFinite(uvHeight) || uvHeight <= 0) {
+    throw new ModelValidationError('The current project has invalid UV dimensions.');
+  }
 }
 
 function cubeFaces(uv: UVRect, texture: Texture): Partial<Record<CubeFaceDirection, CubeFaceOptions>> {
@@ -134,11 +140,14 @@ function cubeFaces(uv: UVRect, texture: Texture): Partial<Record<CubeFaceDirecti
   return faces;
 }
 
-function makeCube(voxel: VoxelPlan, size: number, texture: Texture, image: DecodedImage): Cube {
+function makeCube(
+  voxel: VoxelPlan, size: number, texture: Texture, image: DecodedImage,
+  uvWidth: number, uvHeight: number
+): Cube {
   const uv = pixelToUVRect(
     voxel.sourceX, voxel.sourceY,
     image.width, image.height,
-    texture.getUVWidth(), texture.getUVHeight()
+    uvWidth, uvHeight
   );
   return new Cube({
     name: `px_${voxel.sourceX}_${voxel.sourceY}`,
@@ -157,7 +166,7 @@ export function writeModel(
   options: GeneratorOptions
 ): void {
   validatePlan(image, plan, options);
-  preflightFormat();
+  preflightFormat(image);
   if (typeof options.groupName !== 'string') {
     throw new ModelValidationError('Group name must be text.');
   }
@@ -173,18 +182,18 @@ export function writeModel(
   Undo.initEdit(aspects);
   try {
     const texture = writeTexture(image, (created) => aspects.textures?.push(created));
+    const uvWidth = texture.getUVWidth();
+    const uvHeight = texture.getUVHeight();
     const group = new Group({ name: groupName });
     aspects.groups?.push(group);
     group.addTo('root').init();
     for (const voxel of plan.voxels) {
-      const cube = makeCube(voxel, plan.voxelSize, texture, image);
+      const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
       aspects.elements?.push(cube);
       cube.addTo(group).init();
     }
-    Canvas.updateView({
-      elements: aspects.elements,
-      element_aspects: { faces: true, uv: true }
-    });
+    // Cube.init() sets up geometry, faces, and UVs; a second full refresh
+    // would repeat that work for every voxel.
     Undo.finishEdit('Generate Texture Model', aspects);
   } catch (error) {
     Undo.cancelEdit(true);
