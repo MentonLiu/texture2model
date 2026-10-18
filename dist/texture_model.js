@@ -40,6 +40,9 @@
     if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
       throw new ModelValidationError("Voxel size must be greater than zero.", "error.voxel_size");
     }
+    if (options.orientation !== void 0 && options.orientation !== "upright" && options.orientation !== "flat") {
+      throw new ModelValidationError("Model orientation must be upright or flat.", "error.orientation");
+    }
     validateAlphaThreshold(options.alphaThreshold);
     if (typeof options.includeTransparent !== "boolean" || typeof options.centerModel !== "boolean") {
       throw new ModelValidationError(
@@ -116,8 +119,12 @@
     let processedPixels = 0;
     let minX = Infinity;
     let minY = Infinity;
+    let minZ = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
+    let maxZ = -Infinity;
+    const orientation = options.orientation ?? "upright";
+    const flat = orientation === "flat";
     let linesSinceYield = 0;
     let pixelsAtLastLineYield = 0;
     const byColumn = options.processingMode === "column";
@@ -132,11 +139,12 @@
         const alpha = image.data[offset + 3] ?? 0;
         if (options.includeTransparent || alpha > options.alphaThreshold) {
           const x = sourceX * options.voxelSize;
-          const y = (image.height - 1 - sourceY) * options.voxelSize;
+          const y = flat ? 0 : (image.height - 1 - sourceY) * options.voxelSize;
+          const z = flat ? sourceY * options.voxelSize : 0;
           voxels.push({
             x,
             y,
-            z: 0,
+            z,
             sourceX,
             sourceY,
             rgba: {
@@ -148,8 +156,10 @@
           });
           minX = Math.min(minX, x);
           minY = Math.min(minY, y);
+          minZ = Math.min(minZ, z);
           maxX = Math.max(maxX, x + options.voxelSize);
           maxY = Math.max(maxY, y + options.voxelSize);
+          maxZ = Math.max(maxZ, z + options.voxelSize);
         }
         processedPixels += 1;
         if (options.processingMode === "pixel" && processedPixels % batchSize === 0) {
@@ -174,26 +184,27 @@
     }
     task.token?.throwIfCancelled();
     const bounds = voxels.length === 0 ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] } : {
-      min: [minX, minY, 0],
-      max: [maxX, maxY, options.voxelSize],
-      size: [maxX - minX, maxY - minY, options.voxelSize]
+      min: [minX, minY, minZ],
+      max: [maxX, maxY, maxZ],
+      size: [maxX - minX, maxY - minY, maxZ - minZ]
     };
     if (options.centerModel && voxels.length > 0) {
       const offsetX = -(minX + maxX) / 2;
       const offsetY = -(minY + maxY) / 2;
-      const offsetZ = -options.voxelSize / 2;
+      const offsetZ = -(minZ + maxZ) / 2;
       for (const voxel of voxels) {
         voxel.x += offsetX;
         voxel.y += offsetY;
         voxel.z += offsetZ;
       }
-      bounds.min = [minX + offsetX, minY + offsetY, offsetZ];
-      bounds.max = [maxX + offsetX, maxY + offsetY, options.voxelSize + offsetZ];
+      bounds.min = [minX + offsetX, minY + offsetY, minZ + offsetZ];
+      bounds.max = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
     }
     return {
       width: image.width,
       height: image.height,
       voxelSize: options.voxelSize,
+      orientation,
       voxelCount: voxels.length,
       bounds,
       voxels
@@ -282,7 +293,7 @@
         "error.decoded_data_url"
       );
     }
-    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
+    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || (plan.orientation ?? "upright") !== (options.orientation ?? "upright") || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
       throw new ModelValidationError(
         "Preview no longer matches the chosen image or settings.",
         "error.preview_stale"
@@ -337,18 +348,21 @@
     }
     const minX = minSourceX * size;
     const maxX = (maxSourceX + 1) * size;
-    const minY = (image.height - 1 - maxSourceY) * size;
-    const maxY = (image.height - minSourceY) * size;
+    const flat = options.orientation === "flat";
+    const minY = flat ? 0 : (image.height - 1 - maxSourceY) * size;
+    const maxY = flat ? size : (image.height - minSourceY) * size;
+    const minZ = flat ? minSourceY * size : 0;
+    const maxZ = flat ? (maxSourceY + 1) * size : size;
     const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
     const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
-    const offsetZ = options.centerModel ? -size / 2 : 0;
+    const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
     for (const voxel of plan.voxels) {
-      if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) || !sameNumber(voxel.z, offsetZ)) {
+      if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY) || !sameNumber(voxel.z, (flat ? voxel.sourceY * size : 0) + offsetZ)) {
         throw new ModelValidationError("Preview geometry is stale or invalid.", "error.preview_geometry");
       }
     }
-    const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
-    const expectedMax = [maxX + offsetX, maxY + offsetY, size + offsetZ];
+    const expectedMin = [minX + offsetX, minY + offsetY, minZ + offsetZ];
+    const expectedMax = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
     for (let axis = 0; axis < 3; axis += 1) {
       if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) || !sameNumber(
         plan.bounds.size[axis] ?? NaN,
@@ -455,6 +469,9 @@
     "texture_model.field.choose_texture": "Choose PNG",
     "texture_model.field.thumbnail_alt": "Texture thumbnail",
     "texture_model.section.settings": "Generation Settings",
+    "texture_model.field.orientation": "Model orientation",
+    "texture_model.field.upright": "Upright",
+    "texture_model.field.flat": "Lying flat",
     "texture_model.field.processing_mode": "Processing mode",
     "texture_model.field.row_mode": "By row",
     "texture_model.field.column_mode": "By column",
@@ -484,6 +501,7 @@
     "texture_model.preview.select_image": "Choose a texture to preview",
     "texture_model.error.image_dimensions": "Image width and height must be positive integers.",
     "texture_model.error.image_rgba": "Image RGBA data length does not match its dimensions.",
+    "texture_model.error.orientation": "Model orientation must be upright or flat.",
     "texture_model.error.processing_mode": "Processing mode must be pixel, row, or column.",
     "texture_model.error.voxel_size": "Voxel Size must be greater than zero.",
     "texture_model.error.boolean_options": "Transparency and centering settings must be boolean.",
@@ -524,6 +542,9 @@
     "texture_model.field.choose_texture": "\u9009\u62E9 PNG",
     "texture_model.field.thumbnail_alt": "\u7EB9\u7406\u7F29\u7565\u56FE",
     "texture_model.section.settings": "\u751F\u6210\u8BBE\u7F6E",
+    "texture_model.field.orientation": "\u6A21\u578B\u671D\u5411",
+    "texture_model.field.upright": "\u7ACB\u7740\u653E",
+    "texture_model.field.flat": "\u8EBA\u7740\u653E",
     "texture_model.field.processing_mode": "\u5904\u7406\u65B9\u5F0F",
     "texture_model.field.row_mode": "\u6309\u884C",
     "texture_model.field.column_mode": "\u6309\u5217",
@@ -553,6 +574,7 @@
     "texture_model.preview.select_image": "\u9009\u62E9\u7EB9\u7406\u4EE5\u9884\u89C8\u6A21\u578B",
     "texture_model.error.image_dimensions": "\u56FE\u7247\u5BBD\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
     "texture_model.error.image_rgba": "\u56FE\u7247 RGBA \u6570\u636E\u957F\u5EA6\u4E0E\u5C3A\u5BF8\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u987B\u4E3A\u7ACB\u7740\u653E\u6216\u8EBA\u7740\u653E\u3002",
     "texture_model.error.processing_mode": "\u5904\u7406\u65B9\u5F0F\u5FC5\u987B\u4E3A\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u5217\u3002",
     "texture_model.error.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8\u5FC5\u987B\u5927\u4E8E\u96F6\u3002",
     "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u5C45\u4E2D\u9009\u9879\u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002",
@@ -593,6 +615,9 @@
     "texture_model.field.choose_texture": "\u9078\u64C7 PNG",
     "texture_model.field.thumbnail_alt": "\u7D0B\u7406\u7E2E\u5716",
     "texture_model.section.settings": "\u7522\u751F\u8A2D\u5B9A",
+    "texture_model.field.orientation": "\u6A21\u578B\u671D\u5411",
+    "texture_model.field.upright": "\u76F4\u7ACB",
+    "texture_model.field.flat": "\u5E73\u653E",
     "texture_model.field.processing_mode": "\u8655\u7406\u65B9\u5F0F",
     "texture_model.field.row_mode": "\u6309\u884C",
     "texture_model.field.column_mode": "\u6309\u6B04",
@@ -622,6 +647,7 @@
     "texture_model.preview.select_image": "\u9078\u64C7\u7D0B\u7406\u4EE5\u9810\u89BD\u6A21\u578B",
     "texture_model.error.image_dimensions": "\u5716\u7247\u5BEC\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
     "texture_model.error.image_rgba": "\u5716\u7247 RGBA \u8CC7\u6599\u9577\u5EA6\u8207\u5C3A\u5BF8\u4E0D\u7B26\u3002",
+    "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u9808\u70BA\u76F4\u7ACB\u6216\u5E73\u653E\u3002",
     "texture_model.error.processing_mode": "\u8655\u7406\u65B9\u5F0F\u5FC5\u9808\u70BA\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u6B04\u3002",
     "texture_model.error.voxel_size": "\u9AD4\u7D20\u5927\u5C0F\u5FC5\u9808\u5927\u65BC\u96F6\u3002",
     "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u7F6E\u4E2D\u9078\u9805\u5FC5\u9808\u70BA\u5E03\u6797\u503C\u3002",
@@ -1204,6 +1230,7 @@ ${fragmentMarker}`);
       '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr("field.thumbnail_alt") + '" hidden></div>',
       '<span data-output="filename" class="texture-model-filename" hidden></span></section>',
       "<section><h3>" + tr("section.settings") + "</h3>",
+      "<label>" + tr("field.orientation") + ' <span class="texture-model-select"><select data-field="orientation"><option value="upright" selected>' + tr("field.upright") + '</option><option value="flat">' + tr("field.flat") + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">\u25BE</span></span></label>',
       "<label>" + tr("field.processing_mode") + ' <span class="texture-model-select"><select data-field="processingMode"><option value="pixel" selected>' + tr("field.pixel_mode") + '</option><option value="row">' + tr("field.row_mode") + '</option><option value="column">' + tr("field.column_mode") + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">\u25BE</span></span></label>',
       "<label>" + tr("field.voxel_size") + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1" required></label>',
       "<label>" + tr("field.alpha_threshold") + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0" required></label>',
@@ -1261,6 +1288,7 @@ ${fragmentMarker}`);
       });
       for (const name of [
         "processingMode",
+        "orientation",
         "voxelSize",
         "alphaThreshold",
         "includeTransparent",
@@ -1331,6 +1359,7 @@ ${fragmentMarker}`);
     options() {
       const options = {
         processingMode: this.field("processingMode").value,
+        orientation: this.field("orientation").value,
         voxelSize: this.field("voxelSize").valueAsNumber,
         alphaThreshold: this.field("alphaThreshold").valueAsNumber,
         includeTransparent: this.field("includeTransparent").checked,
@@ -1554,7 +1583,7 @@ ${fragmentMarker}`);
     tags: ["Texture", "Modeling", "Tool"],
     description: tr("plugin.description"),
     icon: "view_in_ar",
-    version: "0.2.0-dev1",
+    version: "0.2.0-dev2",
     variant: "both",
     min_version: "5.1.0",
     onload() {

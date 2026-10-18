@@ -41,6 +41,7 @@ The generated texture and all Cubes are placed under one new root Group. One Und
 | Option | Default | Effect |
 | --- | --- | --- |
 | Processing | By pixel | Pixel, row, and column modes create the same geometry and UVs; traversal order and scheduling differ. |
+| Model orientation | Upright | Upright uses the vertical plane; Lying flat uses the horizontal plane. Changing orientation requires another preview. |
 | Voxel Size | 1 | Width, height, and depth of each Cube. |
 | Alpha Threshold | 0 | Generate when source alpha is strictly greater than the threshold. |
 | Include Transparent | Off | When on, every pixel gets a Cube and retains its original texture alpha. |
@@ -62,7 +63,7 @@ The image-to-plan stage yields to the UI in batches and can be cancelled. The fi
 npm run build
 ~~~
 
-The current development target is **0.2.0**, with **0.2.0-dev1** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
+The current development target is **0.2.0**, with **0.2.0-dev2** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
 
 Use **LSP diagnostics only** for syntax and type feedback. Do not run typecheck commands, Lint, tests, or plugin runtime verification. `npm run build` only packages the installable plugin with esbuild. Existing test sources are historical and must not be run. Runtime acceptance is performed by the user; see [docs/TESTING.md](docs/TESTING.md).
 
@@ -111,6 +112,7 @@ npm run build
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | 处理方式 | 按像素 | 支持按像素、按行和按列；生成的几何形状和 UV 相同，遍历顺序与任务调度不同。 |
+| 模型朝向 | 立着放 | 可选立着放或躺着放；切换后需重新预览，预览和生成使用相同朝向。 |
 | 体素尺寸 | 1 | 每个 Cube 的宽、高和厚度。 |
 | 透明度阈值 | 0 | 仅当原像素 alpha 严格大于阈值时生成。 |
 | 包含透明像素 | 关闭 | 开启后每个像素都会生成 Cube，并保留原纹理透明度。 |
@@ -132,7 +134,7 @@ Cube 数量随符合条件的像素数增加：全不透明的 128 × 128 图片
 npm run build
 ~~~
 
-当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev1** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
+当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev2** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
 
 **只允许 LSP 语法和类型诊断**，禁止运行类型检查命令、Lint、任何代码测试或插件运行验证。`npm run build` 仅通过 esbuild 打包安装文件。已有测试源码仅保留历史记录，不得运行。实际功能由用户亲自验收，见 [docs/TESTING.md](docs/TESTING.md)。
 

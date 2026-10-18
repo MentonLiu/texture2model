@@ -30,6 +30,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   }
   if (plan.width !== image.width || plan.height !== image.height ||
       plan.voxelSize !== options.voxelSize ||
+      (plan.orientation ?? 'upright') !== (options.orientation ?? 'upright') ||
       !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
     throw new ModelValidationError(
       'Preview no longer matches the chosen image or settings.', 'error.preview_stale'
@@ -91,20 +92,23 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   }
   const minX = minSourceX * size;
   const maxX = (maxSourceX + 1) * size;
-  const minY = (image.height - 1 - maxSourceY) * size;
-  const maxY = (image.height - minSourceY) * size;
+  const flat = options.orientation === 'flat';
+  const minY = flat ? 0 : (image.height - 1 - maxSourceY) * size;
+  const maxY = flat ? size : (image.height - minSourceY) * size;
+  const minZ = flat ? minSourceY * size : 0;
+  const maxZ = flat ? (maxSourceY + 1) * size : size;
   const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
   const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
-  const offsetZ = options.centerModel ? -size / 2 : 0;
+  const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
   for (const voxel of plan.voxels) {
     if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) ||
-        !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) ||
-        !sameNumber(voxel.z, offsetZ)) {
+        !sameNumber(voxel.y, (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY) ||
+        !sameNumber(voxel.z, (flat ? voxel.sourceY * size : 0) + offsetZ)) {
       throw new ModelValidationError('Preview geometry is stale or invalid.', 'error.preview_geometry');
     }
   }
-  const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
-  const expectedMax = [maxX + offsetX, maxY + offsetY, size + offsetZ];
+  const expectedMin = [minX + offsetX, minY + offsetY, minZ + offsetZ];
+  const expectedMax = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
   for (let axis = 0; axis < 3; axis += 1) {
     if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) ||
         !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) ||

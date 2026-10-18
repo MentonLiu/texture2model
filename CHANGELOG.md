@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0-dev2 — Model orientation / 模型朝向
+
+- Add a Model orientation dropdown: Upright (default) or Lying flat, with the same highlighted border and dropdown arrow as other controls.
+- Apply orientation to voxel coordinates, occupied bounds, centering, preview, and generated Cubes. Changing orientation invalidates the previous preview.
+- Keep source pixel UVs and transparency unchanged in all three processing modes. Deliver on `dev` with LSP diagnostics and esbuild packaging only; user runtime acceptance remains pending.
+
+- 新增“模型朝向”下拉框，可选“立着放 / 躺着放”，默认立着放，沿用醒目边框与下拉箭头。
+- 朝向同步作用于体素坐标、实际边界、居中、预览和生成，切换朝向后必须重新预览。
+- 三种处理方式均保留原像素 UV 和透明度。仅进行 LSP 诊断与 esbuild 打包，在 `dev` 交付，等待用户亲自验收。
+
 ## 0.2.0-dev1 — Development build / 开发测试版本
 
 - Restrict import to PNG, including extension, MIME, and file signature validation.

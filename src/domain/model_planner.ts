@@ -79,8 +79,12 @@ export async function planModel(
   let processedPixels = 0;
   let minX = Infinity;
   let minY = Infinity;
+  let minZ = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
+  let maxZ = -Infinity;
+  const orientation = options.orientation ?? 'upright';
+  const flat = orientation === 'flat';
   let linesSinceYield = 0;
   let pixelsAtLastLineYield = 0;
   const byColumn = options.processingMode === 'column';
@@ -96,11 +100,12 @@ export async function planModel(
       const alpha = image.data[offset + 3] ?? 0;
       if (options.includeTransparent || alpha > options.alphaThreshold) {
         const x = sourceX * options.voxelSize;
-        const y = (image.height - 1 - sourceY) * options.voxelSize;
+        const y = flat ? 0 : (image.height - 1 - sourceY) * options.voxelSize;
+        const z = flat ? sourceY * options.voxelSize : 0;
         voxels.push({
           x,
           y,
-          z: 0,
+          z,
           sourceX,
           sourceY,
           rgba: {
@@ -112,8 +117,10 @@ export async function planModel(
         });
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
+        minZ = Math.min(minZ, z);
         maxX = Math.max(maxX, x + options.voxelSize);
         maxY = Math.max(maxY, y + options.voxelSize);
+        maxZ = Math.max(maxZ, z + options.voxelSize);
       }
       processedPixels += 1;
       if (options.processingMode === 'pixel' && processedPixels % batchSize === 0) {
@@ -144,28 +151,29 @@ export async function planModel(
   const bounds: ModelBounds = voxels.length === 0
     ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] }
     : {
-      min: [minX, minY, 0],
-      max: [maxX, maxY, options.voxelSize],
-      size: [maxX - minX, maxY - minY, options.voxelSize]
+      min: [minX, minY, minZ],
+      max: [maxX, maxY, maxZ],
+      size: [maxX - minX, maxY - minY, maxZ - minZ]
     };
 
   if (options.centerModel && voxels.length > 0) {
     const offsetX = -(minX + maxX) / 2;
     const offsetY = -(minY + maxY) / 2;
-    const offsetZ = -options.voxelSize / 2;
+    const offsetZ = -(minZ + maxZ) / 2;
     for (const voxel of voxels) {
       voxel.x += offsetX;
       voxel.y += offsetY;
       voxel.z += offsetZ;
     }
-    bounds.min = [minX + offsetX, minY + offsetY, offsetZ];
-    bounds.max = [maxX + offsetX, maxY + offsetY, options.voxelSize + offsetZ];
+    bounds.min = [minX + offsetX, minY + offsetY, minZ + offsetZ];
+    bounds.max = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
   }
 
   return {
     width: image.width,
     height: image.height,
     voxelSize: options.voxelSize,
+    orientation,
     voxelCount: voxels.length,
     bounds,
     voxels

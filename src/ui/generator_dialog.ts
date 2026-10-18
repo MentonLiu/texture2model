@@ -6,7 +6,7 @@ import { defaultGroupName } from '../domain/naming';
 import { getVoxelLimitStatus, validateMaxVoxels, validatePlannerOptions } from '../domain/validation';
 import { errorMessage, tr } from '../i18n';
 import { PreviewRenderer } from '../preview/preview_renderer';
-import type { DecodedImage, GeneratorOptions, ModelPlan, ProcessingMode } from '../types';
+import type { DecodedImage, GeneratorOptions, ModelOrientation, ModelPlan, ProcessingMode } from '../types';
 
 export interface GeneratorDialogHandle {
   dialog: Dialog;
@@ -30,6 +30,7 @@ function buildMarkup(): string {
   '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr('field.thumbnail_alt') + '" hidden></div>',
   '<span data-output="filename" class="texture-model-filename" hidden></span></section>',
   '<section><h3>' + tr('section.settings') + '</h3>',
+  '<label>' + tr('field.orientation') + ' <span class="texture-model-select"><select data-field="orientation"><option value="upright" selected>' + tr('field.upright') + '</option><option value="flat">' + tr('field.flat') + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">▾</span></span></label>',
   '<label>' + tr('field.processing_mode') + ' <span class="texture-model-select"><select data-field="processingMode"><option value="pixel" selected>' + tr('field.pixel_mode') + '</option><option value="row">' + tr('field.row_mode') + '</option><option value="column">' + tr('field.column_mode') + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">▾</span></span></label>',
   '<label>' + tr('field.voxel_size') + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1" required></label>',
   '<label>' + tr('field.alpha_threshold') + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0" required></label>',
@@ -96,7 +97,7 @@ class GeneratorController {
   private bind(): void {
     this.listen(this.field<HTMLInputElement>('file'), 'change', () => { void this.selectImage(); });
     for (const name of [
-      'processingMode', 'voxelSize', 'alphaThreshold', 'includeTransparent',
+      'processingMode', 'orientation', 'voxelSize', 'alphaThreshold', 'includeTransparent',
       'centerModel', 'groupName', 'maxVoxels'
     ]) {
       const field = this.field<HTMLElement>(name);
@@ -166,6 +167,7 @@ class GeneratorController {
   private options(): GeneratorOptions {
     const options: GeneratorOptions = {
       processingMode: this.field<HTMLSelectElement>('processingMode').value as ProcessingMode,
+      orientation: this.field<HTMLSelectElement>('orientation').value as ModelOrientation,
       voxelSize: this.field<HTMLInputElement>('voxelSize').valueAsNumber,
       alphaThreshold: this.field<HTMLInputElement>('alphaThreshold').valueAsNumber,
       includeTransparent: this.field<HTMLInputElement>('includeTransparent').checked,

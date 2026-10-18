@@ -40,7 +40,7 @@ The menu is registered through BarMenu and MenuBar.addMenu. Its single Action op
 
 ## Data and coordinates
 
-Image coordinates start at the upper left. For image height H and voxel size S, source pixel (x, y) starts at model (x × S, (H − 1 − y) × S, 0). Centering subtracts the midpoint of occupied bounds without changing spacing. Pixel (the default) and row modes order the plan by source rows, then columns. Column mode orders it by columns, then rows. The writer validates the traversal order for the chosen mode while reading RGBA and UVs from the original source coordinates.
+Image coordinates start at the upper left. For image height H and voxel size S, source pixel (x, y) starts at model (x × S, (H − 1 − y) × S, 0). Upright (the default) uses the XY plane. Lying flat uses the XZ plane: source pixel (x, y) starts at (x × S, 0, y × S), so image top lies toward negative Z relative to image bottom. Centering subtracts the occupied bounds midpoint on all three axes without changing spacing. ModelPlan records the orientation, and generation rejects a plan from a different orientation. Both preview paths render the same planned positions. Pixel (the default) and row modes order the plan by source rows, then columns. Column mode orders it by columns, then rows. The writer validates the traversal order for the chosen mode while reading RGBA and UVs from the original source coordinates.
 
 The writer computes one UV rectangle through the shared pixelToUVRect helper, using Texture.getUVWidth/Height. The same rectangle and texture UUID are assigned to north, south, east, west, up, and down. Every Cube has Box UV disabled and Auto UV set to zero.
 
