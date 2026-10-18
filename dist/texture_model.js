@@ -484,14 +484,11 @@
     "texture_model.section.advanced": "Advanced Settings",
     "texture_model.field.max_cubes": "Maximum Cube count",
     "texture_model.note.performance": "A large number of Cubes can significantly affect Blockbench performance.",
-    "texture_model.action.preview": "Preview",
     "texture_model.action.generate": "Generate in Workspace",
     "texture_model.status.reading_image": "Reading image\u2026",
-    "texture_model.status.image_loaded": "Image loaded. Click Preview to continue.",
-    "texture_model.status.preview_stale": "Settings changed. Preview again before generating.",
     "texture_model.status.over_limit": "The image needs %0 Cubes, above the limit of %1.",
     "texture_model.status.performance_warning": "%0 Cubes may significantly affect Blockbench performance.",
-    "texture_model.status.planning": "Planning model\u2026",
+    "texture_model.status.planning": "Updating preview\u2026",
     "texture_model.status.preview_ready": "Preview ready.",
     "texture_model.status.generated": "Texture Model generated.",
     "texture_model.status.write_unavailable": "Workspace generation is not available.",
@@ -557,14 +554,11 @@
     "texture_model.section.advanced": "\u9AD8\u7EA7\u8BBE\u7F6E",
     "texture_model.field.max_cubes": "\u6700\u5927 Cube \u6570\u91CF",
     "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
-    "texture_model.action.preview": "\u9884\u89C8",
     "texture_model.action.generate": "\u751F\u6210\u5230\u5DE5\u4F5C\u533A",
     "texture_model.status.reading_image": "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026",
-    "texture_model.status.image_loaded": "\u56FE\u7247\u5DF2\u52A0\u8F7D\uFF0C\u8BF7\u70B9\u51FB\u201C\u9884\u89C8\u201D\u7EE7\u7EED\u3002",
-    "texture_model.status.preview_stale": "\u914D\u7F6E\u5DF2\u66F4\u6539\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u518D\u751F\u6210\u3002",
     "texture_model.status.over_limit": "\u9700\u8981\u751F\u6210 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
     "texture_model.status.performance_warning": "%0 \u4E2A Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
-    "texture_model.status.planning": "\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026",
+    "texture_model.status.planning": "\u6B63\u5728\u66F4\u65B0\u9884\u89C8\u2026",
     "texture_model.status.preview_ready": "\u9884\u89C8\u5C31\u7EEA\u3002",
     "texture_model.status.generated": "\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210\u3002",
     "texture_model.status.write_unavailable": "\u5F53\u524D\u65E0\u6CD5\u5199\u5165\u5DE5\u4F5C\u533A\u3002",
@@ -630,14 +624,11 @@
     "texture_model.section.advanced": "\u9032\u968E\u8A2D\u5B9A",
     "texture_model.field.max_cubes": "Cube \u6578\u91CF\u4E0A\u9650",
     "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
-    "texture_model.action.preview": "\u9810\u89BD",
     "texture_model.action.generate": "\u7522\u751F\u5230\u5DE5\u4F5C\u5340",
     "texture_model.status.reading_image": "\u6B63\u5728\u8B80\u53D6\u5716\u7247\u2026",
-    "texture_model.status.image_loaded": "\u5716\u7247\u5DF2\u8F09\u5165\uFF0C\u8ACB\u9EDE\u64CA\u300C\u9810\u89BD\u300D\u7E7C\u7E8C\u3002",
-    "texture_model.status.preview_stale": "\u8A2D\u5B9A\u5DF2\u8B8A\u66F4\uFF0C\u8ACB\u91CD\u65B0\u9810\u89BD\u5F8C\u518D\u7522\u751F\u3002",
     "texture_model.status.over_limit": "\u9700\u8981\u7522\u751F %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
     "texture_model.status.performance_warning": "%0 \u500B Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
-    "texture_model.status.planning": "\u6B63\u5728\u898F\u5283\u6A21\u578B\u2026",
+    "texture_model.status.planning": "\u6B63\u5728\u66F4\u65B0\u9810\u89BD\u2026",
     "texture_model.status.preview_ready": "\u9810\u89BD\u5C31\u7DD2\u3002",
     "texture_model.status.generated": "\u7D0B\u7406\u6A21\u578B\u5DF2\u7522\u751F\u3002",
     "texture_model.status.write_unavailable": "\u76EE\u524D\u7121\u6CD5\u5BEB\u5165\u5DE5\u4F5C\u5340\u3002",
@@ -951,6 +942,12 @@
       }
       this.drawFrame();
     }
+    clear() {
+      if (this.disposed) return;
+      this.plan = null;
+      this.releaseModel();
+      this.drawFrame();
+    }
     resize() {
       if (this.disposed) return;
       const width = Math.max(1, Math.round(this.canvas.clientWidth || (this.width > 1 ? this.width : this.canvas.width || 640)));
@@ -1241,8 +1238,7 @@ ${fragmentMarker}`);
       "<label>" + tr("field.max_cubes") + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
       "<small>" + tr("note.performance") + "</small></details></section>",
       '<p class="texture-model-status" data-output="status" role="status" hidden></p>',
-      '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr("action.preview") + "</button>",
-      '<button type="button" data-action="generate" disabled>' + tr("action.generate") + "</button></div>",
+      '<div class="texture-model-actions"><button type="button" data-action="generate" disabled>' + tr("action.generate") + "</button></div>",
       '</div><div class="texture-model-preview-wrap">',
       '<canvas data-output="preview" class="texture-model-preview" aria-label="' + tr("preview.aria_label") + '"></canvas>',
       "<p>" + tr("preview.controls") + "</p></div></div></div>"
@@ -1261,6 +1257,7 @@ ${fragmentMarker}`);
       this.dialog = dialog;
       this.onGenerate = onGenerate;
       this.cleanup = [];
+      this.disposed = false;
       this.revision = 0;
       this.previewRevision = -1;
       this.root = required(dialog.object, ".texture-model-shell");
@@ -1268,6 +1265,7 @@ ${fragmentMarker}`);
       this.output("filename").hidden = true;
       this.output("thumbnail").hidden = true;
       this.output("thumbnail").removeAttribute("src");
+      this.clearPreview();
       this.setStatus("");
       this.bind();
       this.updateState();
@@ -1297,35 +1295,57 @@ ${fragmentMarker}`);
         "maxVoxels"
       ]) {
         const field = this.field(name);
-        this.listen(field, "input", () => this.invalidate());
-        this.listen(field, "change", () => this.invalidate());
+        const event = field.tagName === "SELECT" || field.type === "checkbox" ? "change" : "input";
+        this.listen(field, event, () => this.schedulePreview());
       }
-      this.listen(required(this.root, '[data-action="preview"]'), "click", () => {
-        void this.preview();
-      });
       this.listen(required(this.root, '[data-action="generate"]'), "click", () => {
         this.generate();
       });
     }
-    replaceTask() {
-      this.token?.cancel();
-      this.token = new CancellationToken();
-      return this.token;
-    }
-    invalidate() {
+    invalidatePreview() {
       this.revision += 1;
       this.previewRevision = -1;
       this.plan = void 0;
-      this.replaceTask();
-      this.renderer?.dispose();
-      this.renderer = void 0;
-      this.updateState();
+      this.previewToken?.cancel();
+      this.previewToken = void 0;
+      if (this.previewFrame !== void 0) cancelAnimationFrame(this.previewFrame);
+      this.previewFrame = void 0;
+      required(this.root, '[data-action="generate"]').disabled = true;
+    }
+    setPreviewBusy(busy) {
+      this.output("preview").setAttribute("aria-busy", String(busy));
+    }
+    clearPreview() {
+      if (this.renderer) this.renderer.clear();
+      else {
+        const canvas = this.output("preview");
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      this.setPreviewBusy(false);
+    }
+    schedulePreview() {
+      if (this.disposed) return;
+      this.invalidatePreview();
+      if (!this.image || !this.alphaHistogram) return;
+      if (!this.updateState()) {
+        this.clearPreview();
+        return;
+      }
+      this.setPreviewBusy(true);
+      this.previewFrame = requestAnimationFrame(() => {
+        this.previewFrame = void 0;
+        void this.preview();
+      });
     }
     async selectImage() {
+      if (this.disposed) return;
       const file = this.field("file").files?.[0];
-      this.invalidate();
+      this.decodeToken?.cancel();
+      this.decodeToken = void 0;
+      this.invalidatePreview();
       this.image = void 0;
       this.alphaHistogram = void 0;
+      this.clearPreview();
       const thumbnail = this.output("thumbnail");
       thumbnail.hidden = true;
       thumbnail.removeAttribute("src");
@@ -1337,23 +1357,28 @@ ${fragmentMarker}`);
         this.setStatus("");
         return;
       }
-      const token = this.replaceTask();
-      const revision = this.revision;
+      const token = new CancellationToken();
+      this.decodeToken = token;
+      const groupName = this.field("groupName");
+      const previousGroupName = groupName.value;
       this.setStatus(tr("status.reading_image"));
+      this.setPreviewBusy(true);
       try {
         const image = await decodeImageFile(file, token);
-        if (token.cancelled || revision !== this.revision) return;
+        if (this.disposed || token.cancelled || this.decodeToken !== token) return;
         this.image = image;
         this.alphaHistogram = buildAlphaHistogram(image);
-        this.field("groupName").value = defaultGroupName(image.fileName);
+        if (groupName.value === previousGroupName) groupName.value = defaultGroupName(image.fileName);
         thumbnail.src = image.dataURL;
         thumbnail.hidden = false;
-        this.setStatus(tr("status.image_loaded"));
-        this.updateState();
+        this.schedulePreview();
       } catch (error) {
-        if (!token.cancelled && revision === this.revision && !(error instanceof TaskCancelledError)) {
+        if (!this.disposed && !token.cancelled && this.decodeToken === token && !(error instanceof TaskCancelledError)) {
+          this.clearPreview();
           this.setStatus(messageOf(error), "error");
         }
+      } finally {
+        if (this.decodeToken === token) this.decodeToken = void 0;
       }
     }
     options() {
@@ -1378,12 +1403,10 @@ ${fragmentMarker}`);
       status.hidden = !message;
     }
     updateState() {
-      const previewButton = required(this.root, '[data-action="preview"]');
       const generateButton = required(this.root, '[data-action="generate"]');
+      generateButton.disabled = true;
       if (!this.image || !this.alphaHistogram) {
-        previewButton.disabled = true;
-        generateButton.disabled = true;
-        return;
+        return false;
       }
       try {
         const options = this.options();
@@ -1393,23 +1416,27 @@ ${fragmentMarker}`);
           options.includeTransparent
         );
         const limit = getVoxelLimitStatus(counts.voxelCount, options.maxVoxels);
-        previewButton.disabled = limit === "exceeded";
-        generateButton.disabled = limit === "exceeded" || !this.plan || this.previewRevision !== this.revision;
         if (limit === "exceeded") {
           this.setStatus(tr("status.over_limit", [counts.voxelCount, options.maxVoxels]), "error");
+          return false;
+        }
+        const ready = this.plan !== void 0 && this.previewRevision === this.revision;
+        generateButton.disabled = !ready;
+        if (!ready) {
+          this.setStatus(tr("status.planning"));
         } else if (limit === "warning") {
           this.setStatus(tr("status.performance_warning", [counts.voxelCount]), "warning");
-        } else if (this.previewRevision !== this.revision) {
-          this.setStatus(tr("status.preview_stale"));
+        } else {
+          this.setStatus(tr("status.preview_ready"));
         }
+        return true;
       } catch (error) {
-        previewButton.disabled = true;
-        generateButton.disabled = true;
         this.setStatus(messageOf(error), "error");
+        return false;
       }
     }
     async preview() {
-      if (!this.image || !this.alphaHistogram) return;
+      if (this.disposed || !this.image || !this.alphaHistogram) return;
       const image = this.image;
       let options;
       try {
@@ -1419,13 +1446,18 @@ ${fragmentMarker}`);
           options.alphaThreshold,
           options.includeTransparent
         ).voxelCount;
-        if (getVoxelLimitStatus(count, options.maxVoxels) === "exceeded") return;
+        if (getVoxelLimitStatus(count, options.maxVoxels) === "exceeded") {
+          this.clearPreview();
+          this.setStatus(tr("status.over_limit", [count, options.maxVoxels]), "error");
+          return;
+        }
       } catch (error) {
+        this.clearPreview();
         this.setStatus(messageOf(error), "error");
         return;
       }
-      this.invalidate();
-      const token = this.replaceTask();
+      const token = new CancellationToken();
+      this.previewToken = token;
       const revision = this.revision;
       let lastPercent = -1;
       this.setStatus(tr("status.planning"));
@@ -1434,25 +1466,27 @@ ${fragmentMarker}`);
           token,
           onProgress: (processed, total) => {
             const percent = Math.round(processed / total * 100);
-            if (!token.cancelled && percent !== lastPercent) {
+            if (!this.disposed && !token.cancelled && revision === this.revision && percent !== lastPercent) {
               lastPercent = percent;
               this.setStatus(tr("status.planning") + " " + percent + "%");
             }
           }
         });
-        if (token.cancelled || revision !== this.revision) return;
-        this.renderer = new PreviewRenderer(this.output("preview"));
+        if (this.disposed || token.cancelled || revision !== this.revision) return;
+        this.renderer ?? (this.renderer = new PreviewRenderer(this.output("preview")));
         this.renderer.render(plan);
         this.plan = plan;
         this.previewRevision = revision;
+        this.setPreviewBusy(false);
         this.updateState();
-        if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === "ok") {
-          this.setStatus(tr("status.preview_ready"));
-        }
       } catch (error) {
+        if (this.disposed || token.cancelled || revision !== this.revision) return;
         this.renderer?.dispose();
         this.renderer = void 0;
+        this.clearPreview();
         if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), "error");
+      } finally {
+        if (this.previewToken === token) this.previewToken = void 0;
       }
     }
     generate() {
@@ -1474,7 +1508,11 @@ ${fragmentMarker}`);
       this.renderer?.resize();
     }
     dispose() {
-      this.token?.cancel();
+      this.disposed = true;
+      this.decodeToken?.cancel();
+      this.decodeToken = void 0;
+      this.invalidatePreview();
+      this.setPreviewBusy(false);
       this.renderer?.dispose();
       this.renderer = void 0;
       for (const cleanup of this.cleanup) cleanup();
@@ -1567,6 +1605,7 @@ ${fragmentMarker}`);
 .texture-model-actions { display: flex; gap: 8px; }
 .texture-model-preview-wrap { min-height: 340px; display: flex; flex-direction: column; }
 .texture-model-preview { flex: 1; display: block; width: 100%; min-height: 300px; background: #20252b; border-radius: 6px; cursor: grab; }
+.texture-model-preview[aria-busy=true] { opacity: .55; }
 .texture-model-preview-wrap p { text-align: center; margin: 6px 0; opacity: .7; }
 @media (max-width: 750px) { .texture-model-columns { grid-template-columns: 1fr; } }
 `;
@@ -1583,7 +1622,7 @@ ${fragmentMarker}`);
     tags: ["Texture", "Modeling", "Tool"],
     description: tr("plugin.description"),
     icon: "view_in_ar",
-    version: "0.2.0-dev2",
+    version: "0.2.0-dev3",
     variant: "both",
     min_version: "5.1.0",
     onload() {

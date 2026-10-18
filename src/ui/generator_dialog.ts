@@ -41,8 +41,7 @@ function buildMarkup(): string {
   '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
   '<small>' + tr('note.performance') + '</small></details></section>',
   '<p class="texture-model-status" data-output="status" role="status" hidden></p>',
-  '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr('action.preview') + '</button>',
-  '<button type="button" data-action="generate" disabled>' + tr('action.generate') + '</button></div>',
+  '<div class="texture-model-actions"><button type="button" data-action="generate" disabled>' + tr('action.generate') + '</button></div>',
   '</div><div class="texture-model-preview-wrap">',
   '<canvas data-output="preview" class="texture-model-preview" aria-label="' + tr('preview.aria_label') + '"></canvas>',
   '<p>' + tr('preview.controls') + '</p></div></div></div>'
@@ -62,7 +61,10 @@ function messageOf(error: unknown): string {
 class GeneratorController {
   private readonly root: HTMLElement;
   private readonly cleanup: Array<() => void> = [];
-  private token?: CancellationToken;
+  private decodeToken?: CancellationToken;
+  private previewToken?: CancellationToken;
+  private previewFrame?: number;
+  private disposed = false;
   private revision = 0;
   private previewRevision = -1;
   private image?: DecodedImage;
@@ -76,6 +78,7 @@ class GeneratorController {
     this.output('filename').hidden = true;
     this.output('thumbnail').hidden = true;
     this.output('thumbnail').removeAttribute('src');
+    this.clearPreview();
     this.setStatus('');
     this.bind();
     this.updateState();
@@ -100,39 +103,65 @@ class GeneratorController {
       'processingMode', 'orientation', 'voxelSize', 'alphaThreshold', 'includeTransparent',
       'centerModel', 'groupName', 'maxVoxels'
     ]) {
-      const field = this.field<HTMLElement>(name);
-      this.listen(field, 'input', () => this.invalidate());
-      this.listen(field, 'change', () => this.invalidate());
+      const field = this.field<HTMLInputElement | HTMLSelectElement>(name);
+      const event = field.tagName === 'SELECT' || field.type === 'checkbox' ? 'change' : 'input';
+      this.listen(field, event, () => this.schedulePreview());
     }
-    this.listen(required(this.root, '[data-action="preview"]'), 'click', () => {
-      void this.preview();
-    });
     this.listen(required(this.root, '[data-action="generate"]'), 'click', () => {
       this.generate();
     });
   }
 
-  private replaceTask(): CancellationToken {
-    this.token?.cancel();
-    this.token = new CancellationToken();
-    return this.token;
-  }
-
-  private invalidate(): void {
+  private invalidatePreview(): void {
     this.revision += 1;
     this.previewRevision = -1;
     this.plan = undefined;
-    this.replaceTask();
-    this.renderer?.dispose();
-    this.renderer = undefined;
-    this.updateState();
+    this.previewToken?.cancel();
+    this.previewToken = undefined;
+    if (this.previewFrame !== undefined) cancelAnimationFrame(this.previewFrame);
+    this.previewFrame = undefined;
+    required<HTMLButtonElement>(this.root, '[data-action="generate"]').disabled = true;
+  }
+
+  private setPreviewBusy(busy: boolean): void {
+    this.output('preview').setAttribute('aria-busy', String(busy));
+  }
+
+  private clearPreview(): void {
+    if (this.renderer) this.renderer.clear();
+    else {
+      const canvas = this.output<HTMLCanvasElement>('preview');
+      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    this.setPreviewBusy(false);
+  }
+
+  private schedulePreview(): void {
+    if (this.disposed) return;
+    this.invalidatePreview();
+    // Settings must not cancel an image that is still being decoded.
+    if (!this.image || !this.alphaHistogram) return;
+    if (!this.updateState()) {
+      this.clearPreview();
+      return;
+    }
+    this.setPreviewBusy(true);
+    // Coalesce edits in one display frame without waiting for blur or a button.
+    this.previewFrame = requestAnimationFrame(() => {
+      this.previewFrame = undefined;
+      void this.preview();
+    });
   }
 
   private async selectImage(): Promise<void> {
+    if (this.disposed) return;
     const file = this.field<HTMLInputElement>('file').files?.[0];
-    this.invalidate();
+    this.decodeToken?.cancel();
+    this.decodeToken = undefined;
+    this.invalidatePreview();
     this.image = undefined;
     this.alphaHistogram = undefined;
+    this.clearPreview();
     const thumbnail = this.output<HTMLImageElement>('thumbnail');
     thumbnail.hidden = true;
     thumbnail.removeAttribute('src');
@@ -144,23 +173,29 @@ class GeneratorController {
       this.setStatus('');
       return;
     }
-    const token = this.replaceTask();
-    const revision = this.revision;
+    const token = new CancellationToken();
+    this.decodeToken = token;
+    const groupName = this.field<HTMLInputElement>('groupName');
+    const previousGroupName = groupName.value;
     this.setStatus(tr('status.reading_image'));
+    this.setPreviewBusy(true);
     try {
       const image = await decodeImageFile(file, token);
-      if (token.cancelled || revision !== this.revision) return;
+      if (this.disposed || token.cancelled || this.decodeToken !== token) return;
       this.image = image;
       this.alphaHistogram = buildAlphaHistogram(image);
-      this.field<HTMLInputElement>('groupName').value = defaultGroupName(image.fileName);
+      if (groupName.value === previousGroupName) groupName.value = defaultGroupName(image.fileName);
       thumbnail.src = image.dataURL;
       thumbnail.hidden = false;
-      this.setStatus(tr('status.image_loaded'));
-      this.updateState();
+      this.schedulePreview();
     } catch (error) {
-      if (!token.cancelled && revision === this.revision && !(error instanceof TaskCancelledError)) {
+      if (!this.disposed && !token.cancelled && this.decodeToken === token &&
+          !(error instanceof TaskCancelledError)) {
+        this.clearPreview();
         this.setStatus(messageOf(error), 'error');
       }
+    } finally {
+      if (this.decodeToken === token) this.decodeToken = undefined;
     }
   }
 
@@ -187,13 +222,11 @@ class GeneratorController {
     status.hidden = !message;
   }
 
-  private updateState(): void {
-    const previewButton = required<HTMLButtonElement>(this.root, '[data-action="preview"]');
+  private updateState(): boolean {
     const generateButton = required<HTMLButtonElement>(this.root, '[data-action="generate"]');
+    generateButton.disabled = true;
     if (!this.image || !this.alphaHistogram) {
-      previewButton.disabled = true;
-      generateButton.disabled = true;
-      return;
+      return false;
     }
     try {
       const options = this.options();
@@ -201,25 +234,28 @@ class GeneratorController {
         this.alphaHistogram, options.alphaThreshold, options.includeTransparent
       );
       const limit = getVoxelLimitStatus(counts.voxelCount, options.maxVoxels);
-      previewButton.disabled = limit === 'exceeded';
-      generateButton.disabled = limit === 'exceeded' ||
-        !this.plan || this.previewRevision !== this.revision;
       if (limit === 'exceeded') {
         this.setStatus(tr('status.over_limit', [counts.voxelCount, options.maxVoxels]), 'error');
+        return false;
+      }
+      const ready = this.plan !== undefined && this.previewRevision === this.revision;
+      generateButton.disabled = !ready;
+      if (!ready) {
+        this.setStatus(tr('status.planning'));
       } else if (limit === 'warning') {
         this.setStatus(tr('status.performance_warning', [counts.voxelCount]), 'warning');
-      } else if (this.previewRevision !== this.revision) {
-        this.setStatus(tr('status.preview_stale'));
+      } else {
+        this.setStatus(tr('status.preview_ready'));
       }
+      return true;
     } catch (error) {
-      previewButton.disabled = true;
-      generateButton.disabled = true;
       this.setStatus(messageOf(error), 'error');
+      return false;
     }
   }
 
   private async preview(): Promise<void> {
-    if (!this.image || !this.alphaHistogram) return;
+    if (this.disposed || !this.image || !this.alphaHistogram) return;
     const image = this.image;
     let options: GeneratorOptions;
     try {
@@ -227,13 +263,18 @@ class GeneratorController {
       const count = countFromAlphaHistogram(
         this.alphaHistogram, options.alphaThreshold, options.includeTransparent
       ).voxelCount;
-      if (getVoxelLimitStatus(count, options.maxVoxels) === 'exceeded') return;
+      if (getVoxelLimitStatus(count, options.maxVoxels) === 'exceeded') {
+        this.clearPreview();
+        this.setStatus(tr('status.over_limit', [count, options.maxVoxels]), 'error');
+        return;
+      }
     } catch (error) {
+      this.clearPreview();
       this.setStatus(messageOf(error), 'error');
       return;
     }
-    this.invalidate();
-    const token = this.replaceTask();
+    const token = new CancellationToken();
+    this.previewToken = token;
     const revision = this.revision;
     let lastPercent = -1;
     this.setStatus(tr('status.planning'));
@@ -242,25 +283,28 @@ class GeneratorController {
         token,
         onProgress: (processed, total) => {
           const percent = Math.round(processed / total * 100);
-          if (!token.cancelled && percent !== lastPercent) {
+          if (!this.disposed && !token.cancelled && revision === this.revision && percent !== lastPercent) {
             lastPercent = percent;
             this.setStatus(tr('status.planning') + ' ' + percent + '%');
           }
         }
       });
-      if (token.cancelled || revision !== this.revision) return;
-      this.renderer = new PreviewRenderer(this.output<HTMLCanvasElement>('preview'));
+      if (this.disposed || token.cancelled || revision !== this.revision) return;
+      this.renderer ??= new PreviewRenderer(this.output<HTMLCanvasElement>('preview'));
       this.renderer.render(plan);
       this.plan = plan;
       this.previewRevision = revision;
+      this.setPreviewBusy(false);
       this.updateState();
-      if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === 'ok') {
-        this.setStatus(tr('status.preview_ready'));
-      }
     } catch (error) {
+      // A cancelled task must never dispose a newer renderer or overwrite its status.
+      if (this.disposed || token.cancelled || revision !== this.revision) return;
       this.renderer?.dispose();
       this.renderer = undefined;
+      this.clearPreview();
       if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), 'error');
+    } finally {
+      if (this.previewToken === token) this.previewToken = undefined;
     }
   }
 
@@ -283,7 +327,11 @@ class GeneratorController {
   resize(): void { this.renderer?.resize(); }
 
   dispose(): void {
-    this.token?.cancel();
+    this.disposed = true;
+    this.decodeToken?.cancel();
+    this.decodeToken = undefined;
+    this.invalidatePreview();
+    this.setPreviewBusy(false);
     this.renderer?.dispose();
     this.renderer = undefined;
     for (const cleanup of this.cleanup) cleanup();

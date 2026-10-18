@@ -47,6 +47,7 @@ export const pluginStyles = `
 .texture-model-actions { display: flex; gap: 8px; }
 .texture-model-preview-wrap { min-height: 340px; display: flex; flex-direction: column; }
 .texture-model-preview { flex: 1; display: block; width: 100%; min-height: 300px; background: #20252b; border-radius: 6px; cursor: grab; }
+.texture-model-preview[aria-busy=true] { opacity: .55; }
 .texture-model-preview-wrap p { text-align: center; margin: 6px 0; opacity: .7; }
 @media (max-width: 750px) { .texture-model-columns { grid-template-columns: 1fr; } }
 `;

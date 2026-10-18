@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-dev3 — Live preview / 实时预览
+
+- Remove the Preview button. PNG import and every settings edit now refresh the preview automatically, without waiting for a click or field blur.
+- Cancel obsolete calculations, coalesce edits within a display frame, and keep image decoding independent from settings changes.
+- Preserve rotation, zoom, and the renderer across updates. Clear outdated geometry on invalid inputs or exceeded limits, and enable Generate only for a current valid preview.
+- Deliver on `dev` with LSP diagnostics and esbuild packaging only; runtime acceptance remains pending with the user.
+
+- 删除“预览”按钮，导入 PNG 后自动预览，输入或选项变化时实时更新，无需点击按钮或离开输入框。
+- 连续操作取消旧计算，同一显示帧内的编辑合并处理，修改参数不会中断图片读取。
+- 更新时保留旋转、缩放及渲染器；输入无效或超出上限时清除过期画面，只有最新有效预览就绪后才允许生成。
+- 在 `dev` 交付，仅进行 LSP 诊断与 esbuild 打包，等待用户亲自进行功能验收。
+
 ## 0.2.0-dev2 — Model orientation / 模型朝向
 
 - Add a Model orientation dropdown: Upright (default) or Lying flat, with the same highlighted border and dropdown arrow as other controls.
