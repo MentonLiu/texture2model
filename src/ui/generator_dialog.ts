@@ -6,7 +6,7 @@ import { defaultGroupName } from '../domain/naming';
 import { getVoxelLimitStatus, validateMaxVoxels, validatePlannerOptions } from '../domain/validation';
 import { errorMessage, tr } from '../i18n';
 import { PreviewRenderer } from '../preview/preview_renderer';
-import type { DecodedImage, GeneratorOptions, ModelPlan, ProcessingMode } from '../types';
+import type { DecodedImage, GeneratorOptions, ModelOrientation, ModelPlan, ProcessingMode, Vector3 } from '../types';
 
 export interface GeneratorDialogHandle {
   dialog: Dialog;
@@ -19,33 +19,42 @@ export type GenerateHandler = (
   options: GeneratorOptions
 ) => void;
 
+function groupScaleMarkup(group: 'outer' | 'inner'): string {
+  return '<fieldset class="texture-model-scale-group"><legend>' + tr('group.' + group) + '</legend>' +
+    '<div class="texture-model-axis-fields">' + ['X', 'Y', 'Z'].map((axis) =>
+      '<label><span>' + axis + '</span><input data-field="' + group + 'Scale' + axis +
+      '" type="number" min="0.01" step="0.1" value="1" required></label>'
+    ).join('') + '</div></fieldset>';
+}
+
 function buildMarkup(): string {
   return [
   '<div class="texture-model-shell"><div class="texture-model-columns">',
   '<div class="texture-model-controls">',
   '<section><h3>' + tr('section.texture') + '</h3>',
-  '<label class="texture-model-file">' + tr('field.choose_texture') + ' <input data-field="file" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label>',
-  '<span data-output="filename">' + tr('field.no_image') + '</span>',
-  '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr('field.thumbnail_alt') + '" hidden></section>',
+  '<div class="texture-model-import"><label class="texture-model-file">',
+  '<span class="material-icons" aria-hidden="true">add_photo_alternate</span><span>' + tr('field.choose_texture') + '</span>',
+  '<input data-field="file" type="file" accept="image/png,.png" aria-label="' + tr('field.choose_texture') + '"></label>',
+  '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr('field.thumbnail_alt') + '" hidden></div>',
+  '<span data-output="filename" class="texture-model-filename" hidden></span></section>',
   '<section><h3>' + tr('section.settings') + '</h3>',
-  '<label>' + tr('field.processing_mode') + ' <select data-field="processingMode"><option value="row">' + tr('field.row_mode') + '</option><option value="pixel">' + tr('field.pixel_mode') + '</option></select></label>',
-  '<label>' + tr('field.voxel_size') + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1"></label>',
-  '<label>' + tr('field.alpha_threshold') + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0"></label>',
+  '<label>' + tr('field.orientation') + ' <span class="texture-model-select"><select data-field="orientation"><option value="upright" selected>' + tr('field.upright') + '</option><option value="flat">' + tr('field.flat') + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">▾</span></span></label>',
+  '<label>' + tr('field.processing_mode') + ' <span class="texture-model-select"><select data-field="processingMode"><option value="pixel" selected>' + tr('field.pixel_mode') + '</option><option value="row">' + tr('field.row_mode') + '</option><option value="column">' + tr('field.column_mode') + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">▾</span></span></label>',
+  '<label>' + tr('field.voxel_size') + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1" required></label>',
+  '<label>' + tr('field.alpha_threshold') + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0" required></label>',
   '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr('field.include_transparent') + '</label>',
   '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr('field.center_model') + '</label>',
   '<label>' + tr('field.group_name') + ' <input data-field="groupName" type="text" value="texture_model"></label>',
+  '<label class="texture-model-checkbox"><input data-field="splitOuterRing" type="checkbox"> ' + tr('field.split_outer_ring') + '</label>',
+  '<fieldset data-output="groupSettings" class="texture-model-group-settings" hidden disabled>',
+  '<legend>' + tr('field.group_scale') + '</legend>',
+  groupScaleMarkup('outer'), groupScaleMarkup('inner'),
+  '<small>' + tr('note.group_scale') + '</small></fieldset>',
   '<details><summary>' + tr('section.advanced') + '</summary>',
-  '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000"></label>',
+  '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
   '<small>' + tr('note.performance') + '</small></details></section>',
-  '<section class="texture-model-stats"><h3>' + tr('section.stats') + '</h3>',
-  '<div>' + tr('stats.image_dimensions') + ' <strong data-output="dimensions">—</strong></div>',
-  '<div>' + tr('stats.total_pixels') + ' <strong data-output="totalPixels">—</strong></div>',
-  '<div>' + tr('stats.visible_pixels') + ' <strong data-output="visiblePixels">—</strong></div>',
-  '<div>' + tr('stats.expected_cubes') + ' <strong data-output="voxelCount">—</strong></div>',
-  '<div>' + tr('stats.model_dimensions') + ' <strong data-output="modelSize">—</strong></div></section>',
-  '<p class="texture-model-status" data-output="status" role="status">' + tr('status.choose_image') + '</p>',
-  '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr('action.preview') + '</button>',
-  '<button type="button" data-action="generate" disabled>' + tr('action.generate') + '</button></div>',
+  '<p class="texture-model-status" data-output="status" role="status" hidden></p>',
+  '<div class="texture-model-actions"><button type="button" data-action="generate" disabled>' + tr('action.generate') + '</button></div>',
   '</div><div class="texture-model-preview-wrap">',
   '<canvas data-output="preview" class="texture-model-preview" aria-label="' + tr('preview.aria_label') + '"></canvas>',
   '<p>' + tr('preview.controls') + '</p></div></div></div>'
@@ -65,7 +74,10 @@ function messageOf(error: unknown): string {
 class GeneratorController {
   private readonly root: HTMLElement;
   private readonly cleanup: Array<() => void> = [];
-  private token?: CancellationToken;
+  private decodeToken?: CancellationToken;
+  private previewToken?: CancellationToken;
+  private previewFrame?: number;
+  private disposed = false;
   private revision = 0;
   private previewRevision = -1;
   private image?: DecodedImage;
@@ -75,6 +87,13 @@ class GeneratorController {
 
   constructor(private readonly dialog: Dialog, private readonly onGenerate?: GenerateHandler) {
     this.root = required<HTMLElement>(dialog.object, '.texture-model-shell');
+    this.field<HTMLInputElement>('file').value = '';
+    this.output('filename').hidden = true;
+    this.output('thumbnail').hidden = true;
+    this.output('thumbnail').removeAttribute('src');
+    this.clearPreview();
+    this.setStatus('');
+    this.updateGroupFields();
     this.bind();
     this.updateState();
   }
@@ -95,75 +114,134 @@ class GeneratorController {
   private bind(): void {
     this.listen(this.field<HTMLInputElement>('file'), 'change', () => { void this.selectImage(); });
     for (const name of [
-      'processingMode', 'voxelSize', 'alphaThreshold', 'includeTransparent',
-      'centerModel', 'groupName', 'maxVoxels'
+      'processingMode', 'orientation', 'voxelSize', 'alphaThreshold', 'includeTransparent',
+      'centerModel', 'groupName', 'maxVoxels', 'splitOuterRing',
+      'outerScaleX', 'outerScaleY', 'outerScaleZ', 'innerScaleX', 'innerScaleY', 'innerScaleZ'
     ]) {
-      const field = this.field<HTMLElement>(name);
-      this.listen(field, 'input', () => this.invalidate());
-      this.listen(field, 'change', () => this.invalidate());
+      const field = this.field<HTMLInputElement | HTMLSelectElement>(name);
+      const event = field.tagName === 'SELECT' || field.type === 'checkbox' ? 'change' : 'input';
+      this.listen(field, event, () => {
+        this.updateGroupFields();
+        this.schedulePreview();
+      });
     }
-    this.listen(required(this.root, '[data-action="preview"]'), 'click', () => {
-      void this.preview();
-    });
     this.listen(required(this.root, '[data-action="generate"]'), 'click', () => {
       this.generate();
     });
   }
 
-  private replaceTask(): CancellationToken {
-    this.token?.cancel();
-    this.token = new CancellationToken();
-    return this.token;
+  private updateGroupFields(): void {
+    const enabled = this.field<HTMLInputElement>('splitOuterRing').checked;
+    const settings = this.output<HTMLFieldSetElement>('groupSettings');
+    settings.hidden = !enabled;
+    settings.disabled = !enabled;
   }
 
-  private invalidate(): void {
+  private invalidatePreview(): void {
     this.revision += 1;
     this.previewRevision = -1;
     this.plan = undefined;
-    this.replaceTask();
-    this.renderer?.dispose();
-    this.renderer = undefined;
-    this.updateState();
+    this.previewToken?.cancel();
+    this.previewToken = undefined;
+    if (this.previewFrame !== undefined) cancelAnimationFrame(this.previewFrame);
+    this.previewFrame = undefined;
+    required<HTMLButtonElement>(this.root, '[data-action="generate"]').disabled = true;
+  }
+
+  private setPreviewBusy(busy: boolean): void {
+    this.output('preview').setAttribute('aria-busy', String(busy));
+  }
+
+  private clearPreview(): void {
+    if (this.renderer) this.renderer.clear();
+    else {
+      const canvas = this.output<HTMLCanvasElement>('preview');
+      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    this.setPreviewBusy(false);
+  }
+
+  private schedulePreview(): void {
+    if (this.disposed) return;
+    this.invalidatePreview();
+    // Settings must not cancel an image that is still being decoded.
+    if (!this.image || !this.alphaHistogram) return;
+    if (!this.updateState()) {
+      this.clearPreview();
+      return;
+    }
+    this.setPreviewBusy(true);
+    // Coalesce edits in one display frame without waiting for blur or a button.
+    this.previewFrame = requestAnimationFrame(() => {
+      this.previewFrame = undefined;
+      void this.preview();
+    });
   }
 
   private async selectImage(): Promise<void> {
+    if (this.disposed) return;
     const file = this.field<HTMLInputElement>('file').files?.[0];
-    this.invalidate();
+    this.decodeToken?.cancel();
+    this.decodeToken = undefined;
+    this.invalidatePreview();
     this.image = undefined;
     this.alphaHistogram = undefined;
+    this.clearPreview();
     const thumbnail = this.output<HTMLImageElement>('thumbnail');
     thumbnail.hidden = true;
     thumbnail.removeAttribute('src');
-    this.output('filename').textContent = file?.name ?? tr('field.no_image');
+    const filename = this.output('filename');
+    filename.textContent = file?.name ?? '';
+    filename.hidden = !file;
     this.updateState();
-    if (!file) return;
-    const token = this.replaceTask();
-    const revision = this.revision;
+    if (!file) {
+      this.setStatus('');
+      return;
+    }
+    const token = new CancellationToken();
+    this.decodeToken = token;
+    const groupName = this.field<HTMLInputElement>('groupName');
+    const previousGroupName = groupName.value;
     this.setStatus(tr('status.reading_image'));
+    this.setPreviewBusy(true);
     try {
       const image = await decodeImageFile(file, token);
-      if (token.cancelled || revision !== this.revision) return;
+      if (this.disposed || token.cancelled || this.decodeToken !== token) return;
       this.image = image;
       this.alphaHistogram = buildAlphaHistogram(image);
-      this.field<HTMLInputElement>('groupName').value = defaultGroupName(image.fileName);
+      if (groupName.value === previousGroupName) groupName.value = defaultGroupName(image.fileName);
       thumbnail.src = image.dataURL;
       thumbnail.hidden = false;
-      this.setStatus(tr('status.image_loaded'));
-      this.updateState();
+      this.schedulePreview();
     } catch (error) {
-      if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), 'error');
+      if (!this.disposed && !token.cancelled && this.decodeToken === token &&
+          !(error instanceof TaskCancelledError)) {
+        this.clearPreview();
+        this.setStatus(messageOf(error), 'error');
+      }
+    } finally {
+      if (this.decodeToken === token) this.decodeToken = undefined;
     }
   }
 
   private options(): GeneratorOptions {
+    const splitOuterRing = this.field<HTMLInputElement>('splitOuterRing').checked;
+    const scale = (group: 'outer' | 'inner'): Vector3 => splitOuterRing
+      ? [
+        this.field<HTMLInputElement>(group + 'ScaleX').valueAsNumber,
+        this.field<HTMLInputElement>(group + 'ScaleY').valueAsNumber,
+        this.field<HTMLInputElement>(group + 'ScaleZ').valueAsNumber
+      ] : [1, 1, 1];
     const options: GeneratorOptions = {
       processingMode: this.field<HTMLSelectElement>('processingMode').value as ProcessingMode,
-      voxelSize: Number(this.field<HTMLInputElement>('voxelSize').value),
-      alphaThreshold: Number(this.field<HTMLInputElement>('alphaThreshold').value),
+      orientation: this.field<HTMLSelectElement>('orientation').value as ModelOrientation,
+      grouping: { enabled: splitOuterRing, outerScale: scale('outer'), innerScale: scale('inner') },
+      voxelSize: this.field<HTMLInputElement>('voxelSize').valueAsNumber,
+      alphaThreshold: this.field<HTMLInputElement>('alphaThreshold').valueAsNumber,
       includeTransparent: this.field<HTMLInputElement>('includeTransparent').checked,
       centerModel: this.field<HTMLInputElement>('centerModel').checked,
       groupName: this.field<HTMLInputElement>('groupName').value.trim() || 'texture_model',
-      maxVoxels: Number(this.field<HTMLInputElement>('maxVoxels').value)
+      maxVoxels: this.field<HTMLInputElement>('maxVoxels').valueAsNumber
     };
     validatePlannerOptions(options);
     validateMaxVoxels(options.maxVoxels);
@@ -174,53 +252,43 @@ class GeneratorController {
     const status = this.output('status');
     status.textContent = message;
     status.dataset.level = level;
+    status.hidden = !message;
   }
 
-  private updateState(): void {
-    const previewButton = required<HTMLButtonElement>(this.root, '[data-action="preview"]');
+  private updateState(): boolean {
     const generateButton = required<HTMLButtonElement>(this.root, '[data-action="generate"]');
+    generateButton.disabled = true;
     if (!this.image || !this.alphaHistogram) {
-      for (const name of ['dimensions', 'totalPixels', 'visiblePixels', 'voxelCount', 'modelSize']) {
-        this.output(name).textContent = '—';
-      }
-      previewButton.disabled = true;
-      generateButton.disabled = true;
-      return;
+      return false;
     }
     try {
       const options = this.options();
       const counts = countFromAlphaHistogram(
         this.alphaHistogram, options.alphaThreshold, options.includeTransparent
       );
-      this.output('dimensions').textContent = this.image.width + ' × ' + this.image.height;
-      this.output('totalPixels').textContent = String(counts.totalPixels);
-      this.output('visiblePixels').textContent = String(counts.visiblePixels);
-      this.output('voxelCount').textContent = String(counts.voxelCount);
-      this.output('modelSize').textContent = [
-        this.image.width * options.voxelSize,
-        this.image.height * options.voxelSize,
-        options.voxelSize
-      ].join(' × ');
       const limit = getVoxelLimitStatus(counts.voxelCount, options.maxVoxels);
-      previewButton.disabled = limit === 'exceeded';
-      generateButton.disabled = limit === 'exceeded' ||
-        !this.plan || this.previewRevision !== this.revision;
       if (limit === 'exceeded') {
         this.setStatus(tr('status.over_limit', [counts.voxelCount, options.maxVoxels]), 'error');
+        return false;
+      }
+      const ready = this.plan !== undefined && this.previewRevision === this.revision;
+      generateButton.disabled = !ready;
+      if (!ready) {
+        this.setStatus(tr('status.planning'));
       } else if (limit === 'warning') {
         this.setStatus(tr('status.performance_warning', [counts.voxelCount]), 'warning');
-      } else if (this.previewRevision !== this.revision) {
-        this.setStatus(tr('status.preview_stale'));
+      } else {
+        this.setStatus(tr('status.preview_ready'));
       }
+      return true;
     } catch (error) {
-      previewButton.disabled = true;
-      generateButton.disabled = true;
       this.setStatus(messageOf(error), 'error');
+      return false;
     }
   }
 
   private async preview(): Promise<void> {
-    if (!this.image || !this.alphaHistogram) return;
+    if (this.disposed || !this.image || !this.alphaHistogram) return;
     const image = this.image;
     let options: GeneratorOptions;
     try {
@@ -228,13 +296,18 @@ class GeneratorController {
       const count = countFromAlphaHistogram(
         this.alphaHistogram, options.alphaThreshold, options.includeTransparent
       ).voxelCount;
-      if (getVoxelLimitStatus(count, options.maxVoxels) === 'exceeded') return;
+      if (getVoxelLimitStatus(count, options.maxVoxels) === 'exceeded') {
+        this.clearPreview();
+        this.setStatus(tr('status.over_limit', [count, options.maxVoxels]), 'error');
+        return;
+      }
     } catch (error) {
+      this.clearPreview();
       this.setStatus(messageOf(error), 'error');
       return;
     }
-    this.invalidate();
-    const token = this.replaceTask();
+    const token = new CancellationToken();
+    this.previewToken = token;
     const revision = this.revision;
     let lastPercent = -1;
     this.setStatus(tr('status.planning'));
@@ -243,25 +316,28 @@ class GeneratorController {
         token,
         onProgress: (processed, total) => {
           const percent = Math.round(processed / total * 100);
-          if (!token.cancelled && percent !== lastPercent) {
+          if (!this.disposed && !token.cancelled && revision === this.revision && percent !== lastPercent) {
             lastPercent = percent;
             this.setStatus(tr('status.planning') + ' ' + percent + '%');
           }
         }
       });
-      if (token.cancelled || revision !== this.revision) return;
-      this.renderer = new PreviewRenderer(this.output<HTMLCanvasElement>('preview'));
+      if (this.disposed || token.cancelled || revision !== this.revision) return;
+      this.renderer ??= new PreviewRenderer(this.output<HTMLCanvasElement>('preview'));
       this.renderer.render(plan);
       this.plan = plan;
       this.previewRevision = revision;
+      this.setPreviewBusy(false);
       this.updateState();
-      if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === 'ok') {
-        this.setStatus(tr('status.preview_ready', [plan.voxelCount]));
-      }
     } catch (error) {
+      // A cancelled task must never dispose a newer renderer or overwrite its status.
+      if (this.disposed || token.cancelled || revision !== this.revision) return;
       this.renderer?.dispose();
       this.renderer = undefined;
+      this.clearPreview();
       if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), 'error');
+    } finally {
+      if (this.previewToken === token) this.previewToken = undefined;
     }
   }
 
@@ -284,7 +360,11 @@ class GeneratorController {
   resize(): void { this.renderer?.resize(); }
 
   dispose(): void {
-    this.token?.cancel();
+    this.disposed = true;
+    this.decodeToken?.cancel();
+    this.decodeToken = undefined;
+    this.invalidatePreview();
+    this.setPreviewBusy(false);
     this.renderer?.dispose();
     this.renderer = undefined;
     for (const cleanup of this.cleanup) cleanup();

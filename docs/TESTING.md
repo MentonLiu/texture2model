@@ -1,49 +1,46 @@
-# Testing
+# 0.2.0-pre 发布验证与用户验收
 
-## Automated results
+当前目标版本：0.2.0。用户已于 2026-10-18 明确授权将 `dev` 合并至 `main`，发布预览版本 `0.2.0-pre`，标签为 `v0.2.0-pre`。本次发布汇总至 `0.2.0-dev4` 的开发内容；功能运行验收仍未由智能体执行。
 
-As of 2026-10-05, local checks:
+## 验证边界
 
-| Check | Result | Scope |
+遵守 [AGENTS.md](../AGENTS.md) 与 [git.md](../git.md)：仅允许 LSP 语法和类型诊断、源代码差异审阅与 esbuild 打包。禁止 `tsc`、类型检查脚本、Lint、单元/集成/回归/冒烟测试及插件运行测试。已有 `tests/` 为历史文件，本轮不执行、不扩展。
+
+## 本轮交付记录
+
+| 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| npm run typecheck | PASS | TypeScript and blockbench-types 5.2.0 |
-| npm run lint | PASS | Source and tests |
-| npm run test | PASS | 21 tests: planning, transparency, Y mapping, row/pixel equivalence, cancellation, UV corners, naming, limit, writer host mocks, lifecycle host mocks |
-| npm run build | PASS | Single-file dist/texture_model.js |
-| Blockbench 5.2.0 desktop integration | PENDING | Local file load reached Blockbench's plugin trust warning; it was cancelled before executing the plugin |
+| LSP 语法/类型诊断 | 0 错误、0 警告 | TypeScript Language Server 6.0.2，使用项目 TypeScript 5.9.3，经 LSP 的 `initialize` / `didOpen` / `publishDiagnostics` 收到全部 17 个源文件诊断 |
+| 安装文件打包 | 已完成 | `npm run build` 成功，仅通过 esbuild 转译打包，不执行插件 |
+| 代码测试、Lint、类型检查命令 | 未运行 | 用户明确禁止 |
+| Blockbench 功能验收 | 等待用户亲自测试 | 不以 LSP 或打包成功替代功能验收 |
 
-Host mocks verify the intended API call sequence. They do **not** prove Blockbench visual output or native Undo behavior. The remaining manual checks are below.
+记录日期：2026-10-18。预发布安装文件大小：88,947 字节。SHA-256：`55a465bc5467ee5727739caac618297f8fd9bea1333613543c8aa88b14d9085f`。
 
-## Prepared textures
+## 本轮外圈分组与缩放验收（用户亲自执行，智能体不执行）
 
-- rgb_transparent_2x2.png: top row red/green, bottom row blue/transparent.
-- corners_4x2.png: non-square image with different colors at all corners.
-- opaque_16x16.png, opaque_32x32.png, opaque_64x64.png, opaque_128x128.png: fully opaque performance cases.
+- 默认关闭“外圈像素单独分组”。关闭时保留总组及其直接 Cube 子节点；开启后出现两组各自的 XYZ 缩放输入框，默认均为 1，修改即自动更新预览。
+- 使用现有 [opaque_16x16.png](../tests/fixtures/opaque_16x16.png)：开启分组后总组下应有“外圈像素”60 个 Cube、“内部像素”196 个 Cube，无遗漏、无重复。保持缩放为 1 时，几何和 UV 应与未分组一致。
+- 使用带透明留白的实心 3×3 图案 PNG：有效图案应分为 8 个外圈、1 个内部像素。封闭孔洞的内边缘不算外圈；多个不相连图案各自的外轮廓都应归入外圈组。
+- 立着放、体素尺寸 1：外圈 Z 缩放改为 2 后，仅外圈厚度变为 2，内部保持厚度 1；内部 X 改为 2 后，仅内部组围绕自身中心加宽。躺着放时，Y 轴控制厚度。检查三种处理方式、居中开关下预览与生成一致。
+- 组缩放必须大于零；清空、输入 0 或负值，应报错、禁用生成，修正后自动恢复。关闭分组时应忽略并隐藏缩放字段；重新开启时保留输入供继续调整。
+- 单像素和一像素宽图案只有外圈子组，不应生成空内部组。全透明 PNG 在默认设置下没有 Cube；开启“包含透明像素”后，额外透明像素归入内部组，不改变实际图案的外圈判定。
+- 生成后检查每个子组的原点位于本组中心，可在 Blockbench 中独立选择和调整。一次撤销应同时移除总组、子组、所有 Cube 和纹理；重做恢复完整层级。
+- 快速修改缩放、透明度阈值或更换 PNG，以及检测过程中关闭生成器，不应出现旧轮廓结果覆盖最新设置。
 
-Regenerate the 4×2 and opaque fixtures with npm run fixtures.
+## 实时预览验收（用户亲自执行，智能体不执行）
 
-## Blockbench manual acceptance checklist — PENDING
+从“文件 → 插件 → 从文件加载插件”加载 [dist/texture_model.js](../dist/texture_model.js)，版本应为 `0.2.0-pre`。若已安装旧版，先卸载旧版再加载此文件。
 
-1. In Blockbench 5.2.x, create a **Generic Model** project. Note Cube.all.length, Group.all.length, and Texture.all.length.
-2. Load dist/texture_model.js from the local file. Confirm one top-level **纹理模型** menu with **打开纹理模型生成器…** and **关于插件**. Open the resizable Dialog.
-3. Select rgb_transparent_2x2.png. Confirm 2 × 2, four total pixels, three visible pixels, three estimated Cubes, and a thumbnail.
-4. Click **预览**. Confirm the red/green top row, blue bottom-left, and empty bottom-right. Recheck all three Blockbench collection lengths: they must match step 1. Change Voxel Size: Generate must disable until another preview. Close/reopen the Dialog and confirm old tasks do not reappear.
-5. Preview again and generate. Confirm exactly one new root Group with direct children px_0_0, px_1_0, px_0_1; exactly three 1 × 1 × 1 Cubes; and one new image Texture. All six faces of the red Cube must show the red texel, with equivalent checks for green and blue. Inspect each face's enabled state, texture, and UV rectangle.
-6. Undo once: the three Cubes, Group, and Texture must all disappear. Redo once: all must return.
-7. Enable **包含透明像素** and re-preview: estimate and generated count must become four, with the fourth Cube retaining alpha zero in its texture.
-8. Use corners_4x2.png. Confirm width 4, height 2, correct top/bottom orientation, and the same source texel on all six faces of each corner Cube.
-9. Try a format with mandatory Box UV. Generation must be rejected before any model changes.
-10. Reload and unload the plugin. Confirm no duplicate menu, Action, Dialog, listeners, or persistent preview resources.
+1. 新建兼容的通用模型项目，打开生成器。确认只保留“生成到工作区”按钮，没有“预览”按钮、统计区或“关于纹理模型”入口。
+2. 导入 [corners_4x2.png](../tests/fixtures/corners_4x2.png)，无需额外点击即开始预览，完成后生成按钮自动启用。预览过程中不应修改工作区模型。
+3. 保持数值输入框焦点，直接输入体素尺寸和透明度阈值；画面应随有效输入自动更新，无需按回车或离开输入框。切换处理方式、模型朝向、包含透明像素和居中选项，以及编辑组名称、数量上限，都应自动更新。
+4. 切换“立着放 / 躺着放”：4×2 PNG、尺寸 1 时，完整占用尺寸分别为 4×2×1 和 4×1×2，预览和生成一致。三种处理方式保持相同的坐标、颜色和 UV；按列时组内 Cube 顺序按列排列。
+5. 旋转和缩放预览，再修改参数，视角应保留。连续快速修改参数时，更新中的旧画面变淡，生成按钮禁用；最终画面只对应最后一组设置，不能被旧结果或错误覆盖。
+6. 使用较大 PNG，读取期间修改参数和组名称，应按最新设置自动预览，读取不应因参数变化而中断。快速切换两张 PNG，最后只显示后一张图片的缩略图、画面和文件名。
+7. 清空数值输入或降低数量上限至不满足当前模型时，应显示错误、清除过期画面并禁用生成；修正输入或提高上限后应自动恢复预览。尝试 JPEG、WebP 和改名为 PNG 的非 PNG 文件，应拒绝导入并清除原画面。
+8. 使用 [rgb_transparent_2x2.png](../tests/fixtures/rgb_transparent_2x2.png)，默认生成 3 个 Cube；开启“包含透明像素”后自动更新并生成 4 个。每个 Cube 六面应采样对应的源像素。
+9. 计算期间关闭或卸载插件，再重新打开或加载，应无旧任务结果、错误、变淡状态或重复菜单。重新打开后需重新选择图片，导入后自动预览。
+10. 预览就绪后生成，确认组名称和最终设置一致。一次撤销应移除本次纹理、Group 和所有 Cube，重做恢复。检查全透明图、单像素图、非正方形图，以及超过 8,000 Cube 时的性能提示。
 
-## Large texture matrix — Blockbench Preview/Generation PENDING
-
-The plan timings below are **Node CLI only**, median of five runs with real event-loop yields on this machine. They are not Blockbench preview or generation times.
-
-| Texture | Expected Cubes | CLI Plan median | Blockbench Preview | Blockbench Generation |
-| --- | ---: | ---: | --- | --- |
-| 16 × 16 | 256 | 1.27 ms | PENDING | PENDING |
-| 32 × 32 | 1,024 | 1.32 ms | PENDING | PENDING |
-| 64 × 64 | 4,096 | 2.83 ms | PENDING | PENDING |
-| 128 × 128 | 16,384 | 9.99 ms | PENDING | PENDING |
-
-The 128 × 128 case is below the default 20,000-Cube limit and should show the yellow performance warning. Record actual Blockbench preview and generation times before declaring host performance PASS.
+本次主分支合并和预发布已获用户明确授权；后续反馈继续在 `dev` 迭代，下一次开发测试可使用 `0.2.0-dev5`。后续再次合并主分支仍须取得用户明确要求。

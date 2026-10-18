@@ -1,13 +1,13 @@
 import { DEFAULT_PIXEL_BATCH_SIZE } from '../constants';
 import type {
   ImagePixelCounts,
-  ModelBounds,
   ModelPlan,
   ModelPlannerOptions,
   PixelImage,
   VoxelPlan
 } from '../types';
 import { CancellationToken } from './cancellation';
+import { outerRingSteps, pixelGroup, resolveGrouping, scalePixelGroups } from './pixel_groups';
 import {
   ModelValidationError,
   validateAlphaThreshold,
@@ -15,10 +15,9 @@ import {
   validatePlannerOptions
 } from './validation';
 
-// A one-pixel-wide image can have thousands of rows. Keep each row atomic,
-// while avoiding a separate browser timer for every tiny row.
-const ROW_BATCH_MAX_ROWS = 256;
-const ROW_BATCH_MAX_PIXELS = 2_048;
+// Batch short rows/columns to avoid a browser timer for each tiny line.
+const LINE_BATCH_MAX_LINES = 256;
+const LINE_BATCH_MAX_PIXELS = 2_048;
 
 export interface PlanTaskOptions {
   token?: CancellationToken;
@@ -56,8 +55,8 @@ export function countImagePixels(
 }
 
 /**
- * Produces independent voxels in row-major source-image order. Both processing
- * modes run the same pixel mapping; only their UI yield points differ.
+ * Pixel and row modes traverse rows; column mode traverses columns. All modes
+ * use the same source coordinates, geometry, and UV mapping.
  */
 export async function planModel(
   image: PixelImage,
@@ -77,28 +76,52 @@ export async function planModel(
   const totalPixels = image.width * image.height;
   const voxels: VoxelPlan[] = [];
   const yieldToUI = task.yieldToUI ?? nextUIFrame;
+  const grouping = resolveGrouping(options);
+  let outerMask: Uint8Array | undefined;
+  if (grouping.enabled) {
+    const steps = outerRingSteps(image, options);
+    let step = steps.next();
+    while (!step.done) {
+      task.token?.throwIfCancelled();
+      await yieldToUI();
+      task.token?.throwIfCancelled();
+      step = steps.next();
+    }
+    outerMask = step.value;
+  }
   let processedPixels = 0;
   let minX = Infinity;
   let minY = Infinity;
+  let minZ = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  let rowsSinceYield = 0;
-  let pixelsAtLastRowYield = 0;
+  let maxZ = -Infinity;
+  const orientation = options.orientation ?? 'upright';
+  const flat = orientation === 'flat';
+  let linesSinceYield = 0;
+  let pixelsAtLastLineYield = 0;
+  const byColumn = options.processingMode === 'column';
+  const lineCount = byColumn ? image.width : image.height;
+  const lineLength = byColumn ? image.height : image.width;
 
-  for (let sourceY = 0; sourceY < image.height; sourceY += 1) {
+  for (let line = 0; line < lineCount; line += 1) {
     task.token?.throwIfCancelled();
-    for (let sourceX = 0; sourceX < image.width; sourceX += 1) {
+    for (let pixel = 0; pixel < lineLength; pixel += 1) {
+      const sourceX = byColumn ? line : pixel;
+      const sourceY = byColumn ? pixel : line;
       const offset = (sourceY * image.width + sourceX) * 4;
       const alpha = image.data[offset + 3] ?? 0;
       if (options.includeTransparent || alpha > options.alphaThreshold) {
         const x = sourceX * options.voxelSize;
-        const y = (image.height - 1 - sourceY) * options.voxelSize;
+        const y = flat ? 0 : (image.height - 1 - sourceY) * options.voxelSize;
+        const z = flat ? sourceY * options.voxelSize : 0;
         voxels.push({
           x,
           y,
-          z: 0,
+          z,
           sourceX,
           sourceY,
+          ...(outerMask ? { group: pixelGroup(outerMask, sourceY * image.width + sourceX) } : {}),
           rgba: {
             r: image.data[offset] ?? 0,
             g: image.data[offset + 1] ?? 0,
@@ -108,8 +131,10 @@ export async function planModel(
         });
         minX = Math.min(minX, x);
         minY = Math.min(minY, y);
+        minZ = Math.min(minZ, z);
         maxX = Math.max(maxX, x + options.voxelSize);
         maxY = Math.max(maxY, y + options.voxelSize);
+        maxZ = Math.max(maxZ, z + options.voxelSize);
       }
       processedPixels += 1;
       if (options.processingMode === 'pixel' && processedPixels % batchSize === 0) {
@@ -118,16 +143,16 @@ export async function planModel(
         task.token?.throwIfCancelled();
       }
     }
-    if (options.processingMode === 'row') {
-      rowsSinceYield += 1;
-      if (rowsSinceYield >= ROW_BATCH_MAX_ROWS ||
-          processedPixels - pixelsAtLastRowYield >= ROW_BATCH_MAX_PIXELS ||
-          sourceY === image.height - 1) {
+    if (options.processingMode !== 'pixel') {
+      linesSinceYield += 1;
+      if (linesSinceYield >= LINE_BATCH_MAX_LINES ||
+          processedPixels - pixelsAtLastLineYield >= LINE_BATCH_MAX_PIXELS ||
+          line === lineCount - 1) {
         task.onProgress?.(processedPixels, totalPixels);
         await yieldToUI();
         task.token?.throwIfCancelled();
-        rowsSinceYield = 0;
-        pixelsAtLastRowYield = processedPixels;
+        linesSinceYield = 0;
+        pixelsAtLastLineYield = processedPixels;
       }
     }
   }
@@ -137,33 +162,25 @@ export async function planModel(
   }
   task.token?.throwIfCancelled();
 
-  const bounds: ModelBounds = voxels.length === 0
-    ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] }
-    : {
-      min: [minX, minY, 0],
-      max: [maxX, maxY, options.voxelSize],
-      size: [maxX - minX, maxY - minY, options.voxelSize]
-    };
-
   if (options.centerModel && voxels.length > 0) {
     const offsetX = -(minX + maxX) / 2;
     const offsetY = -(minY + maxY) / 2;
-    const offsetZ = -options.voxelSize / 2;
+    const offsetZ = -(minZ + maxZ) / 2;
     for (const voxel of voxels) {
       voxel.x += offsetX;
       voxel.y += offsetY;
       voxel.z += offsetZ;
     }
-    bounds.min = [minX + offsetX, minY + offsetY, offsetZ];
-    bounds.max = [maxX + offsetX, maxY + offsetY, options.voxelSize + offsetZ];
   }
 
   return {
     width: image.width,
     height: image.height,
     voxelSize: options.voxelSize,
+    orientation,
+    grouping,
     voxelCount: voxels.length,
-    bounds,
+    bounds: scalePixelGroups(voxels, options.voxelSize, grouping),
     voxels
   };
 }

@@ -6,9 +6,7 @@
   var PERFORMANCE_WARNING_VOXELS = 8e3;
   var DEFAULT_PIXEL_BATCH_SIZE = 256;
   var SUPPORTED_IMAGE_MIME_TYPES = [
-    "image/png",
-    "image/jpeg",
-    "image/webp"
+    "image/png"
   ];
 
   // src/domain/validation.ts
@@ -36,11 +34,23 @@
     }
   }
   function validatePlannerOptions(options) {
-    if (options.processingMode !== "row" && options.processingMode !== "pixel") {
-      throw new ModelValidationError("Processing mode must be row or pixel.", "error.processing_mode");
+    if (options.processingMode !== "row" && options.processingMode !== "pixel" && options.processingMode !== "column") {
+      throw new ModelValidationError("Processing mode must be pixel, row, or column.", "error.processing_mode");
     }
     if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
       throw new ModelValidationError("Voxel size must be greater than zero.", "error.voxel_size");
+    }
+    if (options.orientation !== void 0 && options.orientation !== "upright" && options.orientation !== "flat") {
+      throw new ModelValidationError("Model orientation must be upright or flat.", "error.orientation");
+    }
+    const grouping = options.grouping;
+    if (grouping !== void 0) {
+      if (typeof grouping.enabled !== "boolean") {
+        throw new ModelValidationError("Pixel grouping must be enabled or disabled.", "error.grouping");
+      }
+      if (grouping.enabled && [grouping.outerScale, grouping.innerScale].some((scale) => !Array.isArray(scale) || scale.length !== 3 || !scale.every((value) => Number.isFinite(value) && value > 0))) {
+        throw new ModelValidationError("Each group needs positive finite X, Y, and Z scales.", "error.group_scale");
+      }
     }
     validateAlphaThreshold(options.alphaThreshold);
     if (typeof options.includeTransparent !== "boolean" || typeof options.centerModel !== "boolean") {
@@ -77,9 +87,112 @@
     return "ok";
   }
 
+  // src/domain/pixel_groups.ts
+  var BATCH_SIZE = 2048;
+  var ELIGIBLE = 1;
+  var EXTERIOR = 2;
+  var OUTER_RING = 3;
+  function resolveGrouping(options) {
+    if (!options.grouping?.enabled) {
+      return { enabled: false, outerScale: [1, 1, 1], innerScale: [1, 1, 1] };
+    }
+    return {
+      enabled: true,
+      outerScale: [...options.grouping.outerScale],
+      innerScale: [...options.grouping.innerScale]
+    };
+  }
+  function* outerRingSteps(image, options) {
+    const count = image.width * image.height;
+    const mask = new Uint8Array(count);
+    const queue = new Uint32Array(count);
+    let tail = 0;
+    for (let index = 0; index < count; index += 1) {
+      const x = index % image.width;
+      const y = Math.floor(index / image.width);
+      const eligible = (image.data[index * 4 + 3] ?? 0) > options.alphaThreshold;
+      const edge = x === 0 || y === 0 || x === image.width - 1 || y === image.height - 1;
+      if (eligible) mask[index] = edge ? OUTER_RING : ELIGIBLE;
+      else if (edge) {
+        mask[index] = EXTERIOR;
+        queue[tail++] = index;
+      }
+      if ((index + 1) % BATCH_SIZE === 0) yield;
+    }
+    const visit = (index) => {
+      if (mask[index] === 0) {
+        mask[index] = EXTERIOR;
+        queue[tail++] = index;
+      } else if (mask[index] === ELIGIBLE) mask[index] = OUTER_RING;
+    };
+    for (let head = 0; head < tail; head += 1) {
+      const index = queue[head] ?? 0;
+      const x = index % image.width;
+      if (x > 0) visit(index - 1);
+      if (x < image.width - 1) visit(index + 1);
+      if (index >= image.width) visit(index - image.width);
+      if (index < count - image.width) visit(index + image.width);
+      if ((head + 1) % BATCH_SIZE === 0) yield;
+    }
+    return mask;
+  }
+  function outerRingMask(image, options) {
+    const steps = outerRingSteps(image, options);
+    let step = steps.next();
+    while (!step.done) step = steps.next();
+    return step.value;
+  }
+  function pixelGroup(mask, index) {
+    return mask[index] === OUTER_RING ? "outer" : "inner";
+  }
+  function groupScale(grouping, group) {
+    return group === "outer" ? grouping.outerScale : grouping.innerScale;
+  }
+  function voxelDimensions(voxel, size) {
+    return voxel.size ?? [size, size, size];
+  }
+  function voxelBounds(voxels, size) {
+    if (voxels.length === 0) return { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] };
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const voxel of voxels) {
+      const dimensions = voxelDimensions(voxel, size);
+      const position = [voxel.x, voxel.y, voxel.z];
+      for (const axis of [0, 1, 2]) {
+        min[axis] = Math.min(min[axis], position[axis] ?? 0);
+        max[axis] = Math.max(max[axis], (position[axis] ?? 0) + dimensions[axis]);
+      }
+    }
+    return { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
+  }
+  function scalePixelGroups(voxels, size, grouping) {
+    if (grouping.enabled) {
+      for (const group of ["outer", "inner"]) {
+        const members = voxels.filter((voxel) => voxel.group === group);
+        const bounds2 = voxelBounds(members, size);
+        const scale = groupScale(grouping, group);
+        const center = bounds2.min.map((value, axis) => (value + (bounds2.max[axis] ?? 0)) / 2);
+        for (const voxel of members) {
+          voxel.x = (center[0] ?? 0) + (voxel.x - (center[0] ?? 0)) * scale[0];
+          voxel.y = (center[1] ?? 0) + (voxel.y - (center[1] ?? 0)) * scale[1];
+          voxel.z = (center[2] ?? 0) + (voxel.z - (center[2] ?? 0)) * scale[2];
+          voxel.size = [size * scale[0], size * scale[1], size * scale[2]];
+          if (![voxel.x, voxel.y, voxel.z, ...voxel.size].every(Number.isFinite) || !voxel.size.every((value) => value > 0)) {
+            throw new ModelValidationError("Group scales produce invalid geometry.", "error.group_scale");
+          }
+        }
+      }
+    }
+    const bounds = voxelBounds(voxels, size);
+    if (![...bounds.min, ...bounds.max, ...bounds.size].every(Number.isFinite)) {
+      throw new ModelValidationError("Group scales produce invalid bounds.", "error.group_scale");
+    }
+    return bounds;
+  }
+
   // src/domain/model_planner.ts
-  var ROW_BATCH_MAX_ROWS = 256;
-  var ROW_BATCH_MAX_PIXELS = 2048;
+  var LINE_BATCH_MAX_LINES = 256;
+  var LINE_BATCH_MAX_PIXELS = 2048;
   function nextUIFrame() {
     return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
   }
@@ -115,27 +228,51 @@
     const totalPixels = image.width * image.height;
     const voxels = [];
     const yieldToUI = task.yieldToUI ?? nextUIFrame;
+    const grouping = resolveGrouping(options);
+    let outerMask;
+    if (grouping.enabled) {
+      const steps = outerRingSteps(image, options);
+      let step = steps.next();
+      while (!step.done) {
+        task.token?.throwIfCancelled();
+        await yieldToUI();
+        task.token?.throwIfCancelled();
+        step = steps.next();
+      }
+      outerMask = step.value;
+    }
     let processedPixels = 0;
     let minX = Infinity;
     let minY = Infinity;
+    let minZ = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    let rowsSinceYield = 0;
-    let pixelsAtLastRowYield = 0;
-    for (let sourceY = 0; sourceY < image.height; sourceY += 1) {
+    let maxZ = -Infinity;
+    const orientation = options.orientation ?? "upright";
+    const flat = orientation === "flat";
+    let linesSinceYield = 0;
+    let pixelsAtLastLineYield = 0;
+    const byColumn = options.processingMode === "column";
+    const lineCount = byColumn ? image.width : image.height;
+    const lineLength = byColumn ? image.height : image.width;
+    for (let line = 0; line < lineCount; line += 1) {
       task.token?.throwIfCancelled();
-      for (let sourceX = 0; sourceX < image.width; sourceX += 1) {
+      for (let pixel = 0; pixel < lineLength; pixel += 1) {
+        const sourceX = byColumn ? line : pixel;
+        const sourceY = byColumn ? pixel : line;
         const offset = (sourceY * image.width + sourceX) * 4;
         const alpha = image.data[offset + 3] ?? 0;
         if (options.includeTransparent || alpha > options.alphaThreshold) {
           const x = sourceX * options.voxelSize;
-          const y = (image.height - 1 - sourceY) * options.voxelSize;
+          const y = flat ? 0 : (image.height - 1 - sourceY) * options.voxelSize;
+          const z = flat ? sourceY * options.voxelSize : 0;
           voxels.push({
             x,
             y,
-            z: 0,
+            z,
             sourceX,
             sourceY,
+            ...outerMask ? { group: pixelGroup(outerMask, sourceY * image.width + sourceX) } : {},
             rgba: {
               r: image.data[offset] ?? 0,
               g: image.data[offset + 1] ?? 0,
@@ -145,8 +282,10 @@
           });
           minX = Math.min(minX, x);
           minY = Math.min(minY, y);
+          minZ = Math.min(minZ, z);
           maxX = Math.max(maxX, x + options.voxelSize);
           maxY = Math.max(maxY, y + options.voxelSize);
+          maxZ = Math.max(maxZ, z + options.voxelSize);
         }
         processedPixels += 1;
         if (options.processingMode === "pixel" && processedPixels % batchSize === 0) {
@@ -155,14 +294,14 @@
           task.token?.throwIfCancelled();
         }
       }
-      if (options.processingMode === "row") {
-        rowsSinceYield += 1;
-        if (rowsSinceYield >= ROW_BATCH_MAX_ROWS || processedPixels - pixelsAtLastRowYield >= ROW_BATCH_MAX_PIXELS || sourceY === image.height - 1) {
+      if (options.processingMode !== "pixel") {
+        linesSinceYield += 1;
+        if (linesSinceYield >= LINE_BATCH_MAX_LINES || processedPixels - pixelsAtLastLineYield >= LINE_BATCH_MAX_PIXELS || line === lineCount - 1) {
           task.onProgress?.(processedPixels, totalPixels);
           await yieldToUI();
           task.token?.throwIfCancelled();
-          rowsSinceYield = 0;
-          pixelsAtLastRowYield = processedPixels;
+          linesSinceYield = 0;
+          pixelsAtLastLineYield = processedPixels;
         }
       }
     }
@@ -170,29 +309,24 @@
       task.onProgress?.(processedPixels, totalPixels);
     }
     task.token?.throwIfCancelled();
-    const bounds = voxels.length === 0 ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] } : {
-      min: [minX, minY, 0],
-      max: [maxX, maxY, options.voxelSize],
-      size: [maxX - minX, maxY - minY, options.voxelSize]
-    };
     if (options.centerModel && voxels.length > 0) {
       const offsetX = -(minX + maxX) / 2;
       const offsetY = -(minY + maxY) / 2;
-      const offsetZ = -options.voxelSize / 2;
+      const offsetZ = -(minZ + maxZ) / 2;
       for (const voxel of voxels) {
         voxel.x += offsetX;
         voxel.y += offsetY;
         voxel.z += offsetZ;
       }
-      bounds.min = [minX + offsetX, minY + offsetY, offsetZ];
-      bounds.max = [maxX + offsetX, maxY + offsetY, options.voxelSize + offsetZ];
     }
     return {
       width: image.width,
       height: image.height,
       voxelSize: options.voxelSize,
+      orientation,
+      grouping,
       voxelCount: voxels.length,
-      bounds,
+      bounds: scalePixelGroups(voxels, options.voxelSize, grouping),
       voxels
     };
   }
@@ -246,6 +380,256 @@
     ];
   }
 
+  // src/i18n.ts
+  var ENGLISH = {
+    "texture_model.plugin.title": "Texture Model",
+    "texture_model.plugin.description": "Generate one textured cube for each selected image pixel.",
+    "texture_model.menu.title": "Texture Model",
+    "texture_model.menu.generate": "Open Texture Model Generator\u2026",
+    "texture_model.dialog.title": "Texture Model Generator",
+    "texture_model.dialog.cancel": "Cancel",
+    "texture_model.section.texture": "Texture",
+    "texture_model.field.choose_texture": "Choose PNG",
+    "texture_model.field.thumbnail_alt": "Texture thumbnail",
+    "texture_model.section.settings": "Generation Settings",
+    "texture_model.field.orientation": "Model orientation",
+    "texture_model.field.upright": "Upright",
+    "texture_model.field.flat": "Lying flat",
+    "texture_model.field.processing_mode": "Processing mode",
+    "texture_model.field.row_mode": "By row",
+    "texture_model.field.column_mode": "By column",
+    "texture_model.field.pixel_mode": "By pixel",
+    "texture_model.field.voxel_size": "Voxel Size",
+    "texture_model.field.alpha_threshold": "Alpha Threshold",
+    "texture_model.field.include_transparent": "Include transparent pixels",
+    "texture_model.field.center_model": "Center model",
+    "texture_model.field.group_name": "Group Name",
+    "texture_model.field.split_outer_ring": "Separate outer-ring pixels",
+    "texture_model.field.group_scale": "Group scale",
+    "texture_model.group.outer": "Outer pixels",
+    "texture_model.group.inner": "Inner pixels",
+    "texture_model.note.group_scale": "Scale around each group\u2019s center. 1 = original; X, Y, Z are world axes.",
+    "texture_model.section.advanced": "Advanced Settings",
+    "texture_model.field.max_cubes": "Maximum Cube count",
+    "texture_model.note.performance": "A large number of Cubes can significantly affect Blockbench performance.",
+    "texture_model.action.generate": "Generate in Workspace",
+    "texture_model.status.reading_image": "Reading image\u2026",
+    "texture_model.status.over_limit": "The image needs %0 Cubes, above the limit of %1.",
+    "texture_model.status.performance_warning": "%0 Cubes may significantly affect Blockbench performance.",
+    "texture_model.status.planning": "Updating preview\u2026",
+    "texture_model.status.preview_ready": "Preview ready.",
+    "texture_model.status.generated": "Texture Model generated.",
+    "texture_model.status.write_unavailable": "Workspace generation is not available.",
+    "texture_model.preview.aria_label": "Model preview",
+    "texture_model.preview.controls": "Drag to rotate \xB7 Scroll to zoom",
+    "texture_model.preview.empty": "No Cubes to preview",
+    "texture_model.preview.select_image": "Choose a texture to preview",
+    "texture_model.error.image_dimensions": "Image width and height must be positive integers.",
+    "texture_model.error.image_rgba": "Image RGBA data length does not match its dimensions.",
+    "texture_model.error.orientation": "Model orientation must be upright or flat.",
+    "texture_model.error.grouping": "Pixel grouping must be enabled or disabled.",
+    "texture_model.error.group_scale": "Group X, Y, and Z scales must be finite numbers greater than zero and produce finite dimensions.",
+    "texture_model.error.processing_mode": "Processing mode must be pixel, row, or column.",
+    "texture_model.error.voxel_size": "Voxel Size must be greater than zero.",
+    "texture_model.error.boolean_options": "Transparency and centering settings must be boolean.",
+    "texture_model.error.alpha_threshold": "Alpha Threshold must be an integer from 0 to 255.",
+    "texture_model.error.max_cubes_range": "Maximum Cube count must be between %0 and %1.",
+    "texture_model.error.cube_count": "Cube count must be a nonnegative integer.",
+    "texture_model.error.decoded_data_url": "The decoded image has no usable Data URL.",
+    "texture_model.error.preview_stale": "Preview no longer matches the selected image or settings.",
+    "texture_model.error.preview_transparency_stale": "Preview no longer matches the transparency settings.",
+    "texture_model.error.cube_limit": "The model needs %0 Cubes, above the limit of %1.",
+    "texture_model.error.preview_pixels": "Preview pixel data is stale or invalid.",
+    "texture_model.error.preview_empty_bounds": "Empty preview bounds are invalid.",
+    "texture_model.error.preview_geometry": "Preview geometry is stale or invalid.",
+    "texture_model.error.preview_bounds": "Preview bounds are stale or invalid.",
+    "texture_model.error.open_project": "Open a Blockbench model project before generating.",
+    "texture_model.error.cube_unsupported": "The current project format does not support Cube editing.",
+    "texture_model.error.per_face_uv_unsupported": "The current project format cannot use an independent texture on every Cube face.",
+    "texture_model.error.project_uv_size": "The current project UV dimensions are invalid.",
+    "texture_model.error.uv_size": "The current project has invalid UV dimensions.",
+    "texture_model.error.group_name": "Group name must be text.",
+    "texture_model.error.pixel_batch": "Pixel batch size must be a positive integer.",
+    "texture_model.error.pixel_uv": "Pixel or UV dimensions are invalid.",
+    "texture_model.error.image_type": "Choose a PNG image.",
+    "texture_model.error.image_read": "Could not read the image file.",
+    "texture_model.error.image_decode": "Could not decode the image.",
+    "texture_model.error.image_size": "The image has invalid dimensions.",
+    "texture_model.error.canvas": "Canvas 2D is unavailable.",
+    "texture_model.error.unexpected": "Operation failed: %0"
+  };
+  var SIMPLIFIED_CHINESE = {
+    "texture_model.plugin.title": "\u7EB9\u7406\u6A21\u578B",
+    "texture_model.plugin.description": "\u5C06\u6240\u9009\u56FE\u7247\u4E2D\u7684\u6BCF\u4E2A\u50CF\u7D20\u751F\u6210\u4E3A\u4E00\u4E2A\u5E26\u7EB9\u7406\u7684\u65B9\u5757\u3002",
+    "texture_model.menu.title": "\u7EB9\u7406\u6A21\u578B",
+    "texture_model.menu.generate": "\u6253\u5F00\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668\u2026",
+    "texture_model.dialog.title": "\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668",
+    "texture_model.dialog.cancel": "\u53D6\u6D88",
+    "texture_model.section.texture": "\u7EB9\u7406",
+    "texture_model.field.choose_texture": "\u9009\u62E9 PNG",
+    "texture_model.field.thumbnail_alt": "\u7EB9\u7406\u7F29\u7565\u56FE",
+    "texture_model.section.settings": "\u751F\u6210\u8BBE\u7F6E",
+    "texture_model.field.orientation": "\u6A21\u578B\u671D\u5411",
+    "texture_model.field.upright": "\u7ACB\u7740\u653E",
+    "texture_model.field.flat": "\u8EBA\u7740\u653E",
+    "texture_model.field.processing_mode": "\u5904\u7406\u65B9\u5F0F",
+    "texture_model.field.row_mode": "\u6309\u884C",
+    "texture_model.field.column_mode": "\u6309\u5217",
+    "texture_model.field.pixel_mode": "\u6309\u50CF\u7D20",
+    "texture_model.field.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8",
+    "texture_model.field.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C",
+    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
+    "texture_model.field.center_model": "\u5C45\u4E2D\u6A21\u578B",
+    "texture_model.field.group_name": "\u7EC4\u540D\u79F0",
+    "texture_model.field.split_outer_ring": "\u5916\u5708\u50CF\u7D20\u5355\u72EC\u5206\u7EC4",
+    "texture_model.field.group_scale": "\u5206\u7EC4\u7F29\u653E",
+    "texture_model.group.outer": "\u5916\u5708\u50CF\u7D20",
+    "texture_model.group.inner": "\u5185\u90E8\u50CF\u7D20",
+    "texture_model.note.group_scale": "\u4EE5\u5404\u7EC4\u4E2D\u5FC3\u7F29\u653E\uFF0C1 \u4E3A\u539F\u59CB\u5C3A\u5BF8\uFF0CXYZ \u4F7F\u7528\u4E16\u754C\u5750\u6807\u8F74\u3002",
+    "texture_model.section.advanced": "\u9AD8\u7EA7\u8BBE\u7F6E",
+    "texture_model.field.max_cubes": "\u6700\u5927 Cube \u6570\u91CF",
+    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
+    "texture_model.action.generate": "\u751F\u6210\u5230\u5DE5\u4F5C\u533A",
+    "texture_model.status.reading_image": "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026",
+    "texture_model.status.over_limit": "\u9700\u8981\u751F\u6210 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
+    "texture_model.status.performance_warning": "%0 \u4E2A Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
+    "texture_model.status.planning": "\u6B63\u5728\u66F4\u65B0\u9884\u89C8\u2026",
+    "texture_model.status.preview_ready": "\u9884\u89C8\u5C31\u7EEA\u3002",
+    "texture_model.status.generated": "\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210\u3002",
+    "texture_model.status.write_unavailable": "\u5F53\u524D\u65E0\u6CD5\u5199\u5165\u5DE5\u4F5C\u533A\u3002",
+    "texture_model.preview.aria_label": "\u6A21\u578B\u9884\u89C8",
+    "texture_model.preview.controls": "\u62D6\u52A8\u65CB\u8F6C \xB7 \u6EDA\u8F6E\u7F29\u653E",
+    "texture_model.preview.empty": "\u6CA1\u6709\u53EF\u9884\u89C8\u7684 Cube",
+    "texture_model.preview.select_image": "\u9009\u62E9\u7EB9\u7406\u4EE5\u9884\u89C8\u6A21\u578B",
+    "texture_model.error.image_dimensions": "\u56FE\u7247\u5BBD\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
+    "texture_model.error.image_rgba": "\u56FE\u7247 RGBA \u6570\u636E\u957F\u5EA6\u4E0E\u5C3A\u5BF8\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u987B\u4E3A\u7ACB\u7740\u653E\u6216\u8EBA\u7740\u653E\u3002",
+    "texture_model.error.grouping": "\u5916\u5708\u5206\u7EC4\u9009\u9879\u5FC5\u987B\u4E3A\u5F00\u542F\u6216\u5173\u95ED\u3002",
+    "texture_model.error.group_scale": "\u5404\u7EC4 XYZ \u7F29\u653E\u5FC5\u987B\u4E3A\u5927\u4E8E\u96F6\u7684\u6709\u9650\u6570\u503C\uFF0C\u4E14\u4E0D\u80FD\u4EA7\u751F\u8FC7\u5927\u7684\u6A21\u578B\u5C3A\u5BF8\u3002",
+    "texture_model.error.processing_mode": "\u5904\u7406\u65B9\u5F0F\u5FC5\u987B\u4E3A\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u5217\u3002",
+    "texture_model.error.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8\u5FC5\u987B\u5927\u4E8E\u96F6\u3002",
+    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u5C45\u4E2D\u9009\u9879\u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002",
+    "texture_model.error.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C\u5FC5\u987B\u4E3A 0 \u5230 255 \u4E4B\u95F4\u7684\u6574\u6570\u3002",
+    "texture_model.error.max_cubes_range": "\u6700\u5927 Cube \u6570\u91CF\u5FC5\u987B\u5728 %0 \u5230 %1 \u4E4B\u95F4\u3002",
+    "texture_model.error.cube_count": "Cube \u6570\u91CF\u5FC5\u987B\u4E3A\u975E\u8D1F\u6574\u6570\u3002",
+    "texture_model.error.decoded_data_url": "\u89E3\u7801\u540E\u7684\u56FE\u7247\u6CA1\u6709\u53EF\u7528\u7684 Data URL\u3002",
+    "texture_model.error.preview_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u56FE\u7247\u6216\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.preview_transparency_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u900F\u660E\u5EA6\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
+    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
+    "texture_model.error.preview_pixels": "\u9884\u89C8\u50CF\u7D20\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.preview_empty_bounds": "\u7A7A\u9884\u89C8\u7684\u8FB9\u754C\u6570\u636E\u65E0\u6548\u3002",
+    "texture_model.error.preview_geometry": "\u9884\u89C8\u51E0\u4F55\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.preview_bounds": "\u9884\u89C8\u8FB9\u754C\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
+    "texture_model.error.open_project": "\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Blockbench \u6A21\u578B\u9879\u76EE\u3002",
+    "texture_model.error.cube_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u7F16\u8F91 Cube\u3002",
+    "texture_model.error.per_face_uv_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u4E3A\u6BCF\u4E2A Cube \u9762\u5355\u72EC\u6307\u5B9A\u7EB9\u7406\u3002",
+    "texture_model.error.project_uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.group_name": "\u7EC4\u540D\u79F0\u5FC5\u987B\u4E3A\u6587\u672C\u3002",
+    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
+    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.image_type": "\u8BF7\u9009\u62E9 PNG \u56FE\u7247\u3002",
+    "texture_model.error.image_read": "\u65E0\u6CD5\u8BFB\u53D6\u56FE\u7247\u6587\u4EF6\u3002",
+    "texture_model.error.image_decode": "\u65E0\u6CD5\u89E3\u7801\u56FE\u7247\u3002",
+    "texture_model.error.image_size": "\u56FE\u7247\u5C3A\u5BF8\u65E0\u6548\u3002",
+    "texture_model.error.canvas": "\u5F53\u524D\u73AF\u5883\u65E0\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
+    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u8D25\uFF1A%0"
+  };
+  var TRADITIONAL_CHINESE = {
+    "texture_model.plugin.title": "\u7D0B\u7406\u6A21\u578B",
+    "texture_model.plugin.description": "\u5C07\u6240\u9078\u5716\u7247\u4E2D\u7684\u6BCF\u500B\u50CF\u7D20\u8F49\u63DB\u70BA\u4E00\u500B\u5E36\u7D0B\u7406\u7684\u65B9\u584A\u3002",
+    "texture_model.menu.title": "\u7D0B\u7406\u6A21\u578B",
+    "texture_model.menu.generate": "\u958B\u555F\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668\u2026",
+    "texture_model.dialog.title": "\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668",
+    "texture_model.dialog.cancel": "\u53D6\u6D88",
+    "texture_model.section.texture": "\u7D0B\u7406",
+    "texture_model.field.choose_texture": "\u9078\u64C7 PNG",
+    "texture_model.field.thumbnail_alt": "\u7D0B\u7406\u7E2E\u5716",
+    "texture_model.section.settings": "\u7522\u751F\u8A2D\u5B9A",
+    "texture_model.field.orientation": "\u6A21\u578B\u671D\u5411",
+    "texture_model.field.upright": "\u76F4\u7ACB",
+    "texture_model.field.flat": "\u5E73\u653E",
+    "texture_model.field.processing_mode": "\u8655\u7406\u65B9\u5F0F",
+    "texture_model.field.row_mode": "\u6309\u884C",
+    "texture_model.field.column_mode": "\u6309\u6B04",
+    "texture_model.field.pixel_mode": "\u4F9D\u50CF\u7D20\u8655\u7406",
+    "texture_model.field.voxel_size": "\u9AD4\u7D20\u5927\u5C0F",
+    "texture_model.field.alpha_threshold": "Alpha \u95BE\u503C",
+    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
+    "texture_model.field.center_model": "\u6A21\u578B\u7F6E\u4E2D",
+    "texture_model.field.group_name": "\u7FA4\u7D44\u540D\u7A31",
+    "texture_model.field.split_outer_ring": "\u5916\u5708\u50CF\u7D20\u7368\u7ACB\u5206\u7D44",
+    "texture_model.field.group_scale": "\u5206\u7D44\u7E2E\u653E",
+    "texture_model.group.outer": "\u5916\u5708\u50CF\u7D20",
+    "texture_model.group.inner": "\u5167\u90E8\u50CF\u7D20",
+    "texture_model.note.group_scale": "\u4EE5\u5404\u7D44\u4E2D\u5FC3\u7E2E\u653E\uFF0C1 \u70BA\u539F\u59CB\u5C3A\u5BF8\uFF0CXYZ \u4F7F\u7528\u4E16\u754C\u5EA7\u6A19\u8EF8\u3002",
+    "texture_model.section.advanced": "\u9032\u968E\u8A2D\u5B9A",
+    "texture_model.field.max_cubes": "Cube \u6578\u91CF\u4E0A\u9650",
+    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
+    "texture_model.action.generate": "\u7522\u751F\u5230\u5DE5\u4F5C\u5340",
+    "texture_model.status.reading_image": "\u6B63\u5728\u8B80\u53D6\u5716\u7247\u2026",
+    "texture_model.status.over_limit": "\u9700\u8981\u7522\u751F %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
+    "texture_model.status.performance_warning": "%0 \u500B Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
+    "texture_model.status.planning": "\u6B63\u5728\u66F4\u65B0\u9810\u89BD\u2026",
+    "texture_model.status.preview_ready": "\u9810\u89BD\u5C31\u7DD2\u3002",
+    "texture_model.status.generated": "\u7D0B\u7406\u6A21\u578B\u5DF2\u7522\u751F\u3002",
+    "texture_model.status.write_unavailable": "\u76EE\u524D\u7121\u6CD5\u5BEB\u5165\u5DE5\u4F5C\u5340\u3002",
+    "texture_model.preview.aria_label": "\u6A21\u578B\u9810\u89BD",
+    "texture_model.preview.controls": "\u62D6\u66F3\u65CB\u8F49 \xB7 \u6EFE\u8F2A\u7E2E\u653E",
+    "texture_model.preview.empty": "\u6C92\u6709\u53EF\u9810\u89BD\u7684 Cube",
+    "texture_model.preview.select_image": "\u9078\u64C7\u7D0B\u7406\u4EE5\u9810\u89BD\u6A21\u578B",
+    "texture_model.error.image_dimensions": "\u5716\u7247\u5BEC\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
+    "texture_model.error.image_rgba": "\u5716\u7247 RGBA \u8CC7\u6599\u9577\u5EA6\u8207\u5C3A\u5BF8\u4E0D\u7B26\u3002",
+    "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u9808\u70BA\u76F4\u7ACB\u6216\u5E73\u653E\u3002",
+    "texture_model.error.grouping": "\u5916\u5708\u5206\u7D44\u9078\u9805\u5FC5\u9808\u70BA\u958B\u555F\u6216\u95DC\u9589\u3002",
+    "texture_model.error.group_scale": "\u5404\u7D44 XYZ \u7E2E\u653E\u5FC5\u9808\u70BA\u5927\u65BC\u96F6\u7684\u6709\u9650\u6578\u503C\uFF0C\u4E14\u4E0D\u80FD\u7522\u751F\u904E\u5927\u7684\u6A21\u578B\u5C3A\u5BF8\u3002",
+    "texture_model.error.processing_mode": "\u8655\u7406\u65B9\u5F0F\u5FC5\u9808\u70BA\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u6B04\u3002",
+    "texture_model.error.voxel_size": "\u9AD4\u7D20\u5927\u5C0F\u5FC5\u9808\u5927\u65BC\u96F6\u3002",
+    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u7F6E\u4E2D\u9078\u9805\u5FC5\u9808\u70BA\u5E03\u6797\u503C\u3002",
+    "texture_model.error.alpha_threshold": "Alpha \u95BE\u503C\u5FC5\u9808\u70BA 0 \u5230 255 \u4E4B\u9593\u7684\u6574\u6578\u3002",
+    "texture_model.error.max_cubes_range": "Cube \u6578\u91CF\u4E0A\u9650\u5FC5\u9808\u4ECB\u65BC %0 \u5230 %1\u3002",
+    "texture_model.error.cube_count": "Cube \u6578\u91CF\u5FC5\u9808\u70BA\u975E\u8CA0\u6574\u6578\u3002",
+    "texture_model.error.decoded_data_url": "\u89E3\u78BC\u5F8C\u7684\u5716\u7247\u6C92\u6709\u53EF\u7528\u7684 Data URL\u3002",
+    "texture_model.error.preview_stale": "\u9810\u89BD\u8207\u76EE\u524D\u5716\u7247\u6216\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
+    "texture_model.error.preview_transparency_stale": "\u9810\u89BD\u8207\u76EE\u524D\u900F\u660E\u5EA6\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
+    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
+    "texture_model.error.preview_pixels": "\u9810\u89BD\u50CF\u7D20\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.preview_empty_bounds": "\u7A7A\u9810\u89BD\u7684\u908A\u754C\u8CC7\u6599\u7121\u6548\u3002",
+    "texture_model.error.preview_geometry": "\u9810\u89BD\u5E7E\u4F55\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.preview_bounds": "\u9810\u89BD\u908A\u754C\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
+    "texture_model.error.open_project": "\u8ACB\u5148\u958B\u555F Blockbench \u6A21\u578B\u5C08\u6848\u3002",
+    "texture_model.error.cube_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u7DE8\u8F2F Cube\u3002",
+    "texture_model.error.per_face_uv_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u70BA\u6BCF\u500B Cube \u9762\u500B\u5225\u6307\u5B9A\u7D0B\u7406\u3002",
+    "texture_model.error.project_uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.group_name": "\u7FA4\u7D44\u540D\u7A31\u5FC5\u9808\u70BA\u6587\u5B57\u3002",
+    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
+    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.image_type": "\u8ACB\u9078\u64C7 PNG \u5716\u7247\u3002",
+    "texture_model.error.image_read": "\u7121\u6CD5\u8B80\u53D6\u5716\u7247\u6A94\u6848\u3002",
+    "texture_model.error.image_decode": "\u7121\u6CD5\u89E3\u78BC\u5716\u7247\u3002",
+    "texture_model.error.image_size": "\u5716\u7247\u5C3A\u5BF8\u7121\u6548\u3002",
+    "texture_model.error.canvas": "\u76EE\u524D\u74B0\u5883\u7121\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
+    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u6557\uFF1A%0"
+  };
+  function registerTranslations() {
+    Language.addTranslations("en", ENGLISH);
+    Language.addTranslations("zh", SIMPLIFIED_CHINESE);
+    Language.addTranslations("zh_tw", TRADITIONAL_CHINESE);
+  }
+  function tr(key, variables) {
+    const fullKey = key.startsWith("texture_model.") ? key : "texture_model." + key;
+    return tl(fullKey, variables, ENGLISH[fullKey] ?? fullKey);
+  }
+  function errorMessage(error) {
+    if (error instanceof ModelValidationError) {
+      const variables = error.translationVariables.length > 0 ? error.translationVariables : error.translationKey === "error.unexpected" ? [error.message] : void 0;
+      return tr(error.translationKey, variables);
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    return tr("error.unexpected", [detail]);
+  }
+
   // src/blockbench/texture_writer.ts
   function writeTexture(image, track) {
     const name = uniqueTextureName(image.fileName, Texture.all.map((texture2) => texture2.name));
@@ -273,13 +657,18 @@
     validatePixelImage(image);
     validatePlannerOptions(options);
     validateMaxVoxels(options.maxVoxels);
+    const grouping = resolveGrouping(options);
+    const plannedGrouping = resolveGrouping(plan);
+    if (grouping.enabled !== plannedGrouping.enabled || !grouping.outerScale.every((value, axis) => sameNumber(value, plannedGrouping.outerScale[axis] ?? NaN)) || !grouping.innerScale.every((value, axis) => sameNumber(value, plannedGrouping.innerScale[axis] ?? NaN))) {
+      throw new ModelValidationError("Preview grouping settings are stale.", "error.preview_stale");
+    }
     if (typeof image.dataURL !== "string" || !image.dataURL.startsWith("data:image/")) {
       throw new ModelValidationError(
         "The decoded image has no usable Data URL.",
         "error.decoded_data_url"
       );
     }
-    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
+    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || (plan.orientation ?? "upright") !== (options.orientation ?? "upright") || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
       throw new ModelValidationError(
         "Preview no longer matches the chosen image or settings.",
         "error.preview_stale"
@@ -304,6 +693,7 @@
       );
     }
     const size = options.voxelSize;
+    const outerMask = grouping.enabled && plan.voxelCount > 0 ? outerRingMask(image, options) : void 0;
     let minSourceX = Infinity;
     let minSourceY = Infinity;
     let maxSourceX = -Infinity;
@@ -312,11 +702,12 @@
     for (const voxel of plan.voxels) {
       const { sourceX, sourceY } = voxel;
       const sourceIndex = sourceY * image.width + sourceX;
+      const traversalIndex = options.processingMode === "column" ? sourceX * image.height + sourceY : sourceIndex;
       const pixelIndex = sourceIndex * 4;
-      if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || sourceIndex <= previousSourceIndex || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
+      if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || traversalIndex <= previousSourceIndex || voxel.group !== (outerMask ? pixelGroup(outerMask, sourceIndex) : void 0) || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
         throw new ModelValidationError("Preview pixel data is stale or invalid.", "error.preview_pixels");
       }
-      previousSourceIndex = sourceIndex;
+      previousSourceIndex = traversalIndex;
       minSourceX = Math.min(minSourceX, sourceX);
       maxSourceX = Math.max(maxSourceX, sourceX);
       minSourceY = Math.min(minSourceY, sourceY);
@@ -333,23 +724,34 @@
     }
     const minX = minSourceX * size;
     const maxX = (maxSourceX + 1) * size;
-    const minY = (image.height - 1 - maxSourceY) * size;
-    const maxY = (image.height - minSourceY) * size;
+    const flat = options.orientation === "flat";
+    const minY = flat ? 0 : (image.height - 1 - maxSourceY) * size;
+    const maxY = flat ? size : (image.height - minSourceY) * size;
+    const minZ = flat ? minSourceY * size : 0;
+    const maxZ = flat ? (maxSourceY + 1) * size : size;
     const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
     const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
-    const offsetZ = options.centerModel ? -size / 2 : 0;
-    for (const voxel of plan.voxels) {
-      if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (image.height - 1 - voxel.sourceY) * size + offsetY) || !sameNumber(voxel.z, offsetZ)) {
+    const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
+    const expectedVoxels = plan.voxels.map((voxel) => ({
+      ...voxel,
+      x: voxel.sourceX * size + offsetX,
+      y: (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY,
+      z: (flat ? voxel.sourceY * size : 0) + offsetZ,
+      size: void 0
+    }));
+    const expectedBounds = scalePixelGroups(expectedVoxels, size, grouping);
+    for (let index = 0; index < plan.voxels.length; index += 1) {
+      const voxel = plan.voxels[index];
+      const expected = expectedVoxels[index];
+      if (!voxel || !expected) continue;
+      const dimensions = voxelDimensions(voxel, size);
+      const expectedDimensions = voxelDimensions(expected, size);
+      if (!sameNumber(voxel.x, expected.x) || !sameNumber(voxel.y, expected.y) || !sameNumber(voxel.z, expected.z) || dimensions.length !== 3 || !dimensions.every((value, axis) => sameNumber(value, expectedDimensions[axis] ?? NaN))) {
         throw new ModelValidationError("Preview geometry is stale or invalid.", "error.preview_geometry");
       }
     }
-    const expectedMin = [minX + offsetX, minY + offsetY, offsetZ];
-    const expectedMax = [maxX + offsetX, maxY + offsetY, size + offsetZ];
     for (let axis = 0; axis < 3; axis += 1) {
-      if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) || !sameNumber(
-        plan.bounds.size[axis] ?? NaN,
-        (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN)
-      )) {
+      if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedBounds.min[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedBounds.max[axis] ?? NaN) || !sameNumber(plan.bounds.size[axis] ?? NaN, expectedBounds.size[axis] ?? NaN)) {
         throw new ModelValidationError("Preview bounds are stale or invalid.", "error.preview_bounds");
       }
     }
@@ -395,10 +797,11 @@
       uvWidth,
       uvHeight
     );
+    const dimensions = voxelDimensions(voxel, size);
     return new Cube({
       name: `px_${voxel.sourceX}_${voxel.sourceY}`,
       from: [voxel.x, voxel.y, voxel.z],
-      to: [voxel.x + size, voxel.y + size, voxel.z + size],
+      to: [voxel.x + dimensions[0], voxel.y + dimensions[1], voxel.z + dimensions[2]],
       box_uv: false,
       autouv: 0,
       faces: cubeFaces(uv, texture)
@@ -427,275 +830,35 @@
       const group = new Group({ name: groupName });
       aspects.groups?.push(group);
       group.addTo("root").init();
+      const subgroups = /* @__PURE__ */ new Map();
+      if (options.grouping?.enabled) {
+        for (const key of ["outer", "inner"]) {
+          const members = plan.voxels.filter((voxel) => voxel.group === key);
+          if (members.length === 0) continue;
+          const bounds = voxelBounds(members, plan.voxelSize);
+          const child = new Group({
+            name: tr("group." + key),
+            origin: [
+              (bounds.min[0] + bounds.max[0]) / 2,
+              (bounds.min[1] + bounds.max[1]) / 2,
+              (bounds.min[2] + bounds.max[2]) / 2
+            ]
+          });
+          aspects.groups?.push(child);
+          child.addTo(group).init();
+          subgroups.set(key, child);
+        }
+      }
       for (const voxel of plan.voxels) {
         const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
         aspects.elements?.push(cube);
-        cube.addTo(group).init();
+        cube.addTo(voxel.group ? subgroups.get(voxel.group) ?? group : group).init();
       }
       Undo.finishEdit("Generate Texture Model", aspects);
     } catch (error) {
       Undo.cancelEdit(true);
       throw error;
     }
-  }
-
-  // src/i18n.ts
-  var ENGLISH = {
-    "texture_model.plugin.title": "Texture Model",
-    "texture_model.plugin.description": "Generate one textured cube for each selected image pixel.",
-    "texture_model.menu.title": "Texture Model",
-    "texture_model.menu.generate": "Open Texture Model Generator\u2026",
-    "texture_model.menu.about": "About Texture Model",
-    "texture_model.about.title": "Texture Model",
-    "texture_model.about.message": "Texture Model 0.1.0\nTurn image pixels into a Blockbench voxel model.",
-    "texture_model.dialog.ok": "OK",
-    "texture_model.dialog.title": "Texture Model Generator",
-    "texture_model.dialog.cancel": "Cancel",
-    "texture_model.section.texture": "Texture",
-    "texture_model.field.choose_texture": "Choose texture",
-    "texture_model.field.no_image": "No image selected",
-    "texture_model.field.thumbnail_alt": "Texture thumbnail",
-    "texture_model.section.settings": "Generation Settings",
-    "texture_model.field.processing_mode": "Processing mode",
-    "texture_model.field.row_mode": "By row",
-    "texture_model.field.pixel_mode": "By pixel",
-    "texture_model.field.voxel_size": "Voxel Size",
-    "texture_model.field.alpha_threshold": "Alpha Threshold",
-    "texture_model.field.include_transparent": "Include transparent pixels",
-    "texture_model.field.center_model": "Center model",
-    "texture_model.field.group_name": "Group Name",
-    "texture_model.section.advanced": "Advanced Settings",
-    "texture_model.field.max_cubes": "Maximum Cube count",
-    "texture_model.note.performance": "A large number of Cubes can significantly affect Blockbench performance.",
-    "texture_model.section.stats": "Statistics",
-    "texture_model.stats.image_dimensions": "Image dimensions",
-    "texture_model.stats.total_pixels": "Total pixels",
-    "texture_model.stats.visible_pixels": "Visible pixels",
-    "texture_model.stats.expected_cubes": "Estimated Cubes",
-    "texture_model.stats.model_dimensions": "Estimated model dimensions",
-    "texture_model.action.preview": "Preview",
-    "texture_model.action.generate": "Generate in Workspace",
-    "texture_model.status.choose_image": "Choose a PNG, JPEG, or WebP image.",
-    "texture_model.status.reading_image": "Reading image\u2026",
-    "texture_model.status.image_loaded": "Image loaded. Click Preview to continue.",
-    "texture_model.status.preview_stale": "Settings changed. Preview again before generating.",
-    "texture_model.status.over_limit": "The image needs %0 Cubes, above the limit of %1.",
-    "texture_model.status.performance_warning": "%0 Cubes may significantly affect Blockbench performance.",
-    "texture_model.status.planning": "Planning model\u2026",
-    "texture_model.status.preview_ready": "Preview ready: %0 Cubes.",
-    "texture_model.status.generated": "Texture Model generated.",
-    "texture_model.status.write_unavailable": "Workspace generation is not available.",
-    "texture_model.preview.aria_label": "Model preview",
-    "texture_model.preview.controls": "Drag to rotate \xB7 Scroll to zoom",
-    "texture_model.preview.empty": "No Cubes to preview",
-    "texture_model.preview.select_image": "Choose a texture to preview",
-    "texture_model.error.image_dimensions": "Image width and height must be positive integers.",
-    "texture_model.error.image_rgba": "Image RGBA data length does not match its dimensions.",
-    "texture_model.error.processing_mode": "Processing mode must be row or pixel.",
-    "texture_model.error.voxel_size": "Voxel Size must be greater than zero.",
-    "texture_model.error.boolean_options": "Transparency and centering settings must be boolean.",
-    "texture_model.error.alpha_threshold": "Alpha Threshold must be an integer from 0 to 255.",
-    "texture_model.error.max_cubes_range": "Maximum Cube count must be between %0 and %1.",
-    "texture_model.error.cube_count": "Cube count must be a nonnegative integer.",
-    "texture_model.error.decoded_data_url": "The decoded image has no usable Data URL.",
-    "texture_model.error.preview_stale": "Preview no longer matches the selected image or settings.",
-    "texture_model.error.preview_transparency_stale": "Preview no longer matches the transparency settings.",
-    "texture_model.error.cube_limit": "The model needs %0 Cubes, above the limit of %1.",
-    "texture_model.error.preview_pixels": "Preview pixel data is stale or invalid.",
-    "texture_model.error.preview_empty_bounds": "Empty preview bounds are invalid.",
-    "texture_model.error.preview_geometry": "Preview geometry is stale or invalid.",
-    "texture_model.error.preview_bounds": "Preview bounds are stale or invalid.",
-    "texture_model.error.open_project": "Open a Blockbench model project before generating.",
-    "texture_model.error.cube_unsupported": "The current project format does not support Cube editing.",
-    "texture_model.error.per_face_uv_unsupported": "The current project format cannot use an independent texture on every Cube face.",
-    "texture_model.error.project_uv_size": "The current project UV dimensions are invalid.",
-    "texture_model.error.uv_size": "The current project has invalid UV dimensions.",
-    "texture_model.error.group_name": "Group name must be text.",
-    "texture_model.error.pixel_batch": "Pixel batch size must be a positive integer.",
-    "texture_model.error.pixel_uv": "Pixel or UV dimensions are invalid.",
-    "texture_model.error.image_type": "Choose a PNG, JPEG, or WebP image.",
-    "texture_model.error.image_read": "Could not read the image file.",
-    "texture_model.error.image_decode": "Could not decode the image.",
-    "texture_model.error.image_size": "The image has invalid dimensions.",
-    "texture_model.error.canvas": "Canvas 2D is unavailable.",
-    "texture_model.error.unexpected": "Operation failed: %0"
-  };
-  var SIMPLIFIED_CHINESE = {
-    "texture_model.plugin.title": "\u7EB9\u7406\u6A21\u578B",
-    "texture_model.plugin.description": "\u5C06\u6240\u9009\u56FE\u7247\u4E2D\u7684\u6BCF\u4E2A\u50CF\u7D20\u751F\u6210\u4E3A\u4E00\u4E2A\u5E26\u7EB9\u7406\u7684\u65B9\u5757\u3002",
-    "texture_model.menu.title": "\u7EB9\u7406\u6A21\u578B",
-    "texture_model.menu.generate": "\u6253\u5F00\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668\u2026",
-    "texture_model.menu.about": "\u5173\u4E8E\u7EB9\u7406\u6A21\u578B",
-    "texture_model.about.title": "\u7EB9\u7406\u6A21\u578B",
-    "texture_model.about.message": "\u7EB9\u7406\u6A21\u578B 0.1.0\n\u5C06\u56FE\u7247\u50CF\u7D20\u8F6C\u6362\u4E3A Blockbench \u4F53\u7D20\u6A21\u578B\u3002",
-    "texture_model.dialog.ok": "\u786E\u5B9A",
-    "texture_model.dialog.title": "\u7EB9\u7406\u6A21\u578B\u751F\u6210\u5668",
-    "texture_model.dialog.cancel": "\u53D6\u6D88",
-    "texture_model.section.texture": "\u7EB9\u7406",
-    "texture_model.field.choose_texture": "\u9009\u62E9\u7EB9\u7406",
-    "texture_model.field.no_image": "\u672A\u9009\u62E9\u56FE\u7247",
-    "texture_model.field.thumbnail_alt": "\u7EB9\u7406\u7F29\u7565\u56FE",
-    "texture_model.section.settings": "\u751F\u6210\u8BBE\u7F6E",
-    "texture_model.field.processing_mode": "\u5904\u7406\u65B9\u5F0F",
-    "texture_model.field.row_mode": "\u6309\u884C",
-    "texture_model.field.pixel_mode": "\u6309\u50CF\u7D20",
-    "texture_model.field.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8",
-    "texture_model.field.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C",
-    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
-    "texture_model.field.center_model": "\u5C45\u4E2D\u6A21\u578B",
-    "texture_model.field.group_name": "\u7EC4\u540D\u79F0",
-    "texture_model.section.advanced": "\u9AD8\u7EA7\u8BBE\u7F6E",
-    "texture_model.field.max_cubes": "\u6700\u5927 Cube \u6570\u91CF",
-    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
-    "texture_model.section.stats": "\u7EDF\u8BA1\u4FE1\u606F",
-    "texture_model.stats.image_dimensions": "\u56FE\u7247\u5C3A\u5BF8",
-    "texture_model.stats.total_pixels": "\u603B\u50CF\u7D20\u6570",
-    "texture_model.stats.visible_pixels": "\u53EF\u89C1\u50CF\u7D20\u6570",
-    "texture_model.stats.expected_cubes": "\u9884\u8BA1 Cube \u6570\u91CF",
-    "texture_model.stats.model_dimensions": "\u9884\u8BA1\u6A21\u578B\u5C3A\u5BF8",
-    "texture_model.action.preview": "\u9884\u89C8",
-    "texture_model.action.generate": "\u751F\u6210\u5230\u5DE5\u4F5C\u533A",
-    "texture_model.status.choose_image": "\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u56FE\u7247\u3002",
-    "texture_model.status.reading_image": "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026",
-    "texture_model.status.image_loaded": "\u56FE\u7247\u5DF2\u52A0\u8F7D\uFF0C\u8BF7\u70B9\u51FB\u201C\u9884\u89C8\u201D\u7EE7\u7EED\u3002",
-    "texture_model.status.preview_stale": "\u914D\u7F6E\u5DF2\u66F4\u6539\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u518D\u751F\u6210\u3002",
-    "texture_model.status.over_limit": "\u9700\u8981\u751F\u6210 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
-    "texture_model.status.performance_warning": "%0 \u4E2A Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
-    "texture_model.status.planning": "\u6B63\u5728\u89C4\u5212\u6A21\u578B\u2026",
-    "texture_model.status.preview_ready": "\u9884\u89C8\u5C31\u7EEA\uFF1A%0 \u4E2A Cube\u3002",
-    "texture_model.status.generated": "\u7EB9\u7406\u6A21\u578B\u5DF2\u751F\u6210\u3002",
-    "texture_model.status.write_unavailable": "\u5F53\u524D\u65E0\u6CD5\u5199\u5165\u5DE5\u4F5C\u533A\u3002",
-    "texture_model.preview.aria_label": "\u6A21\u578B\u9884\u89C8",
-    "texture_model.preview.controls": "\u62D6\u52A8\u65CB\u8F6C \xB7 \u6EDA\u8F6E\u7F29\u653E",
-    "texture_model.preview.empty": "\u6CA1\u6709\u53EF\u9884\u89C8\u7684 Cube",
-    "texture_model.preview.select_image": "\u9009\u62E9\u7EB9\u7406\u4EE5\u9884\u89C8\u6A21\u578B",
-    "texture_model.error.image_dimensions": "\u56FE\u7247\u5BBD\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
-    "texture_model.error.image_rgba": "\u56FE\u7247 RGBA \u6570\u636E\u957F\u5EA6\u4E0E\u5C3A\u5BF8\u4E0D\u5339\u914D\u3002",
-    "texture_model.error.processing_mode": "\u5904\u7406\u65B9\u5F0F\u5FC5\u987B\u4E3A\u6309\u884C\u6216\u6309\u50CF\u7D20\u3002",
-    "texture_model.error.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8\u5FC5\u987B\u5927\u4E8E\u96F6\u3002",
-    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u5C45\u4E2D\u9009\u9879\u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002",
-    "texture_model.error.alpha_threshold": "\u900F\u660E\u5EA6\u9608\u503C\u5FC5\u987B\u4E3A 0 \u5230 255 \u4E4B\u95F4\u7684\u6574\u6570\u3002",
-    "texture_model.error.max_cubes_range": "\u6700\u5927 Cube \u6570\u91CF\u5FC5\u987B\u5728 %0 \u5230 %1 \u4E4B\u95F4\u3002",
-    "texture_model.error.cube_count": "Cube \u6570\u91CF\u5FC5\u987B\u4E3A\u975E\u8D1F\u6574\u6570\u3002",
-    "texture_model.error.decoded_data_url": "\u89E3\u7801\u540E\u7684\u56FE\u7247\u6CA1\u6709\u53EF\u7528\u7684 Data URL\u3002",
-    "texture_model.error.preview_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u56FE\u7247\u6216\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
-    "texture_model.error.preview_transparency_stale": "\u9884\u89C8\u4E0E\u5F53\u524D\u900F\u660E\u5EA6\u8BBE\u7F6E\u4E0D\u5339\u914D\u3002",
-    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u4E2A Cube\uFF0C\u8D85\u8FC7\u4E0A\u9650 %1\u3002",
-    "texture_model.error.preview_pixels": "\u9884\u89C8\u50CF\u7D20\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
-    "texture_model.error.preview_empty_bounds": "\u7A7A\u9884\u89C8\u7684\u8FB9\u754C\u6570\u636E\u65E0\u6548\u3002",
-    "texture_model.error.preview_geometry": "\u9884\u89C8\u51E0\u4F55\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
-    "texture_model.error.preview_bounds": "\u9884\u89C8\u8FB9\u754C\u6570\u636E\u5DF2\u8FC7\u671F\u6216\u65E0\u6548\u3002",
-    "texture_model.error.open_project": "\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Blockbench \u6A21\u578B\u9879\u76EE\u3002",
-    "texture_model.error.cube_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u7F16\u8F91 Cube\u3002",
-    "texture_model.error.per_face_uv_unsupported": "\u5F53\u524D\u9879\u76EE\u683C\u5F0F\u4E0D\u652F\u6301\u4E3A\u6BCF\u4E2A Cube \u9762\u5355\u72EC\u6307\u5B9A\u7EB9\u7406\u3002",
-    "texture_model.error.project_uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
-    "texture_model.error.uv_size": "\u5F53\u524D\u9879\u76EE\u7684 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
-    "texture_model.error.group_name": "\u7EC4\u540D\u79F0\u5FC5\u987B\u4E3A\u6587\u672C\u3002",
-    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
-    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u65E0\u6548\u3002",
-    "texture_model.error.image_type": "\u8BF7\u9009\u62E9 PNG\u3001JPEG \u6216 WebP \u56FE\u7247\u3002",
-    "texture_model.error.image_read": "\u65E0\u6CD5\u8BFB\u53D6\u56FE\u7247\u6587\u4EF6\u3002",
-    "texture_model.error.image_decode": "\u65E0\u6CD5\u89E3\u7801\u56FE\u7247\u3002",
-    "texture_model.error.image_size": "\u56FE\u7247\u5C3A\u5BF8\u65E0\u6548\u3002",
-    "texture_model.error.canvas": "\u5F53\u524D\u73AF\u5883\u65E0\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
-    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u8D25\uFF1A%0"
-  };
-  var TRADITIONAL_CHINESE = {
-    "texture_model.plugin.title": "\u7D0B\u7406\u6A21\u578B",
-    "texture_model.plugin.description": "\u5C07\u6240\u9078\u5716\u7247\u4E2D\u7684\u6BCF\u500B\u50CF\u7D20\u8F49\u63DB\u70BA\u4E00\u500B\u5E36\u7D0B\u7406\u7684\u65B9\u584A\u3002",
-    "texture_model.menu.title": "\u7D0B\u7406\u6A21\u578B",
-    "texture_model.menu.generate": "\u958B\u555F\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668\u2026",
-    "texture_model.menu.about": "\u95DC\u65BC\u7D0B\u7406\u6A21\u578B",
-    "texture_model.about.title": "\u7D0B\u7406\u6A21\u578B",
-    "texture_model.about.message": "\u7D0B\u7406\u6A21\u578B 0.1.0\n\u5C07\u5716\u7247\u50CF\u7D20\u8F49\u63DB\u70BA Blockbench \u9AD4\u7D20\u6A21\u578B\u3002",
-    "texture_model.dialog.ok": "\u78BA\u5B9A",
-    "texture_model.dialog.title": "\u7D0B\u7406\u6A21\u578B\u7522\u751F\u5668",
-    "texture_model.dialog.cancel": "\u53D6\u6D88",
-    "texture_model.section.texture": "\u7D0B\u7406",
-    "texture_model.field.choose_texture": "\u9078\u64C7\u7D0B\u7406",
-    "texture_model.field.no_image": "\u672A\u9078\u64C7\u5716\u7247",
-    "texture_model.field.thumbnail_alt": "\u7D0B\u7406\u7E2E\u5716",
-    "texture_model.section.settings": "\u7522\u751F\u8A2D\u5B9A",
-    "texture_model.field.processing_mode": "\u8655\u7406\u65B9\u5F0F",
-    "texture_model.field.row_mode": "\u4F9D\u5217\u8655\u7406",
-    "texture_model.field.pixel_mode": "\u4F9D\u50CF\u7D20\u8655\u7406",
-    "texture_model.field.voxel_size": "\u9AD4\u7D20\u5927\u5C0F",
-    "texture_model.field.alpha_threshold": "Alpha \u95BE\u503C",
-    "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
-    "texture_model.field.center_model": "\u6A21\u578B\u7F6E\u4E2D",
-    "texture_model.field.group_name": "\u7FA4\u7D44\u540D\u7A31",
-    "texture_model.section.advanced": "\u9032\u968E\u8A2D\u5B9A",
-    "texture_model.field.max_cubes": "Cube \u6578\u91CF\u4E0A\u9650",
-    "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
-    "texture_model.section.stats": "\u7D71\u8A08\u8CC7\u6599",
-    "texture_model.stats.image_dimensions": "\u5716\u7247\u5C3A\u5BF8",
-    "texture_model.stats.total_pixels": "\u50CF\u7D20\u7E3D\u6578",
-    "texture_model.stats.visible_pixels": "\u53EF\u898B\u50CF\u7D20\u6578",
-    "texture_model.stats.expected_cubes": "\u9810\u8A08 Cube \u6578\u91CF",
-    "texture_model.stats.model_dimensions": "\u9810\u8A08\u6A21\u578B\u5C3A\u5BF8",
-    "texture_model.action.preview": "\u9810\u89BD",
-    "texture_model.action.generate": "\u7522\u751F\u5230\u5DE5\u4F5C\u5340",
-    "texture_model.status.choose_image": "\u8ACB\u9078\u64C7 PNG\u3001JPEG \u6216 WebP \u5716\u7247\u3002",
-    "texture_model.status.reading_image": "\u6B63\u5728\u8B80\u53D6\u5716\u7247\u2026",
-    "texture_model.status.image_loaded": "\u5716\u7247\u5DF2\u8F09\u5165\uFF0C\u8ACB\u9EDE\u64CA\u300C\u9810\u89BD\u300D\u7E7C\u7E8C\u3002",
-    "texture_model.status.preview_stale": "\u8A2D\u5B9A\u5DF2\u8B8A\u66F4\uFF0C\u8ACB\u91CD\u65B0\u9810\u89BD\u5F8C\u518D\u7522\u751F\u3002",
-    "texture_model.status.over_limit": "\u9700\u8981\u7522\u751F %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
-    "texture_model.status.performance_warning": "%0 \u500B Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
-    "texture_model.status.planning": "\u6B63\u5728\u898F\u5283\u6A21\u578B\u2026",
-    "texture_model.status.preview_ready": "\u9810\u89BD\u5C31\u7DD2\uFF1A%0 \u500B Cube\u3002",
-    "texture_model.status.generated": "\u7D0B\u7406\u6A21\u578B\u5DF2\u7522\u751F\u3002",
-    "texture_model.status.write_unavailable": "\u76EE\u524D\u7121\u6CD5\u5BEB\u5165\u5DE5\u4F5C\u5340\u3002",
-    "texture_model.preview.aria_label": "\u6A21\u578B\u9810\u89BD",
-    "texture_model.preview.controls": "\u62D6\u66F3\u65CB\u8F49 \xB7 \u6EFE\u8F2A\u7E2E\u653E",
-    "texture_model.preview.empty": "\u6C92\u6709\u53EF\u9810\u89BD\u7684 Cube",
-    "texture_model.preview.select_image": "\u9078\u64C7\u7D0B\u7406\u4EE5\u9810\u89BD\u6A21\u578B",
-    "texture_model.error.image_dimensions": "\u5716\u7247\u5BEC\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
-    "texture_model.error.image_rgba": "\u5716\u7247 RGBA \u8CC7\u6599\u9577\u5EA6\u8207\u5C3A\u5BF8\u4E0D\u7B26\u3002",
-    "texture_model.error.processing_mode": "\u8655\u7406\u65B9\u5F0F\u5FC5\u9808\u70BA\u4F9D\u5217\u6216\u4F9D\u50CF\u7D20\u3002",
-    "texture_model.error.voxel_size": "\u9AD4\u7D20\u5927\u5C0F\u5FC5\u9808\u5927\u65BC\u96F6\u3002",
-    "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u7F6E\u4E2D\u9078\u9805\u5FC5\u9808\u70BA\u5E03\u6797\u503C\u3002",
-    "texture_model.error.alpha_threshold": "Alpha \u95BE\u503C\u5FC5\u9808\u70BA 0 \u5230 255 \u4E4B\u9593\u7684\u6574\u6578\u3002",
-    "texture_model.error.max_cubes_range": "Cube \u6578\u91CF\u4E0A\u9650\u5FC5\u9808\u4ECB\u65BC %0 \u5230 %1\u3002",
-    "texture_model.error.cube_count": "Cube \u6578\u91CF\u5FC5\u9808\u70BA\u975E\u8CA0\u6574\u6578\u3002",
-    "texture_model.error.decoded_data_url": "\u89E3\u78BC\u5F8C\u7684\u5716\u7247\u6C92\u6709\u53EF\u7528\u7684 Data URL\u3002",
-    "texture_model.error.preview_stale": "\u9810\u89BD\u8207\u76EE\u524D\u5716\u7247\u6216\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
-    "texture_model.error.preview_transparency_stale": "\u9810\u89BD\u8207\u76EE\u524D\u900F\u660E\u5EA6\u8A2D\u5B9A\u4E0D\u76F8\u7B26\u3002",
-    "texture_model.error.cube_limit": "\u6A21\u578B\u9700\u8981 %0 \u500B Cube\uFF0C\u8D85\u904E\u4E0A\u9650 %1\u3002",
-    "texture_model.error.preview_pixels": "\u9810\u89BD\u50CF\u7D20\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
-    "texture_model.error.preview_empty_bounds": "\u7A7A\u9810\u89BD\u7684\u908A\u754C\u8CC7\u6599\u7121\u6548\u3002",
-    "texture_model.error.preview_geometry": "\u9810\u89BD\u5E7E\u4F55\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
-    "texture_model.error.preview_bounds": "\u9810\u89BD\u908A\u754C\u8CC7\u6599\u5DF2\u904E\u671F\u6216\u7121\u6548\u3002",
-    "texture_model.error.open_project": "\u8ACB\u5148\u958B\u555F Blockbench \u6A21\u578B\u5C08\u6848\u3002",
-    "texture_model.error.cube_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u7DE8\u8F2F Cube\u3002",
-    "texture_model.error.per_face_uv_unsupported": "\u76EE\u524D\u5C08\u6848\u683C\u5F0F\u4E0D\u652F\u63F4\u70BA\u6BCF\u500B Cube \u9762\u500B\u5225\u6307\u5B9A\u7D0B\u7406\u3002",
-    "texture_model.error.project_uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
-    "texture_model.error.uv_size": "\u76EE\u524D\u5C08\u6848\u7684 UV \u5C3A\u5BF8\u7121\u6548\u3002",
-    "texture_model.error.group_name": "\u7FA4\u7D44\u540D\u7A31\u5FC5\u9808\u70BA\u6587\u5B57\u3002",
-    "texture_model.error.pixel_batch": "\u50CF\u7D20\u6279\u6B21\u5927\u5C0F\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
-    "texture_model.error.pixel_uv": "\u50CF\u7D20\u6216 UV \u5C3A\u5BF8\u7121\u6548\u3002",
-    "texture_model.error.image_type": "\u8ACB\u9078\u64C7 PNG\u3001JPEG \u6216 WebP \u5716\u7247\u3002",
-    "texture_model.error.image_read": "\u7121\u6CD5\u8B80\u53D6\u5716\u7247\u6A94\u6848\u3002",
-    "texture_model.error.image_decode": "\u7121\u6CD5\u89E3\u78BC\u5716\u7247\u3002",
-    "texture_model.error.image_size": "\u5716\u7247\u5C3A\u5BF8\u7121\u6548\u3002",
-    "texture_model.error.canvas": "\u76EE\u524D\u74B0\u5883\u7121\u6CD5\u4F7F\u7528 Canvas 2D\u3002",
-    "texture_model.error.unexpected": "\u64CD\u4F5C\u5931\u6557\uFF1A%0"
-  };
-  function registerTranslations() {
-    Language.addTranslations("en", ENGLISH);
-    Language.addTranslations("zh", SIMPLIFIED_CHINESE);
-    Language.addTranslations("zh_tw", TRADITIONAL_CHINESE);
-  }
-  function tr(key, variables) {
-    const fullKey = key.startsWith("texture_model.") ? key : "texture_model." + key;
-    return tl(fullKey, variables, ENGLISH[fullKey] ?? fullKey);
-  }
-  function errorMessage(error) {
-    if (error instanceof ModelValidationError) {
-      const variables = error.translationVariables.length > 0 ? error.translationVariables : error.translationKey === "error.unexpected" ? [error.message] : void 0;
-      return tr(error.translationKey, variables);
-    }
-    const detail = error instanceof Error ? error.message : String(error);
-    return tr("error.unexpected", [detail]);
   }
 
   // src/domain/cancellation.ts
@@ -762,10 +925,9 @@
     const declared = file.type.toLowerCase();
     const parts = file.name.split(".");
     const extension = parts[parts.length - 1]?.toLowerCase();
-    const inferred = extension === "png" ? "image/png" : extension === "jpg" || extension === "jpeg" ? "image/jpeg" : extension === "webp" ? "image/webp" : "";
-    const mimeType = declared || inferred;
-    if (!SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
-      throw new ModelValidationError("Choose a PNG, JPEG, or WebP image.", "error.image_type");
+    const mimeType = declared || (extension === "png" ? "image/png" : "");
+    if (extension !== "png" || !SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
+      throw new ModelValidationError("Choose a PNG image.", "error.image_type");
     }
     return mimeType;
   }
@@ -830,6 +992,13 @@
   }
   async function decodeImageFile(file, token) {
     const mimeType = supportedMimeType(file);
+    token?.throwIfCancelled();
+    const signature = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    token?.throwIfCancelled();
+    const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (signature.length !== pngSignature.length || !pngSignature.every((byte, index) => signature[index] === byte)) {
+      throw new ModelValidationError("Choose a PNG image.", "error.image_type");
+    }
     const dataURL = await readAsDataURL(file, token);
     const image = await loadImage(dataURL, token);
     token?.throwIfCancelled();
@@ -948,6 +1117,12 @@
       }
       this.drawFrame();
     }
+    clear() {
+      if (this.disposed) return;
+      this.plan = null;
+      this.releaseModel();
+      this.drawFrame();
+    }
     resize() {
       if (this.disposed) return;
       const width = Math.max(1, Math.round(this.canvas.clientWidth || (this.width > 1 ? this.width : this.canvas.width || 640)));
@@ -1017,7 +1192,7 @@
       if (!this.scene || !three) return;
       const count = plan.voxels.length;
       const size = plan.voxelSize;
-      const geometry = new three.BoxGeometry(size, size, size);
+      const geometry = new three.BoxGeometry(1, 1, 1);
       this.geometry = geometry;
       const alpha = new Float32Array(count);
       geometry.setAttribute("instanceAlpha", new three.InstancedBufferAttribute(alpha, 1));
@@ -1047,7 +1222,9 @@ ${fragmentMarker}`);
       for (let index = 0; index < count; index += 1) {
         const voxel = plan.voxels[index];
         if (!voxel) continue;
-        matrix.makeTranslation(voxel.x + size / 2, voxel.y + size / 2, voxel.z + size / 2);
+        const dimensions = voxelDimensions(voxel, size);
+        matrix.makeScale(dimensions[0], dimensions[1], dimensions[2]);
+        matrix.setPosition(voxel.x + dimensions[0] / 2, voxel.y + dimensions[1] / 2, voxel.z + dimensions[2] / 2);
         mesh.setMatrixAt(index, matrix);
         color.setRGB(voxel.rgba.r / 255, voxel.rgba.g / 255, voxel.rgba.b / 255);
         mesh.setColorAt(index, color);
@@ -1164,10 +1341,13 @@ ${fragmentMarker}`);
           y: this.height / 2 - (-sinYaw * sinPitch * dx + cosPitch * dy - cosYaw * sinPitch * dz) * scale
         };
       };
-      const sorted = plan.voxels.map((voxel) => ({
-        voxel,
-        depth: (voxel.x + plan.voxelSize / 2 - centerX) * viewX + (voxel.y + plan.voxelSize / 2 - centerY) * viewY + (voxel.z + plan.voxelSize / 2 - centerZ) * viewZ
-      }));
+      const sorted = plan.voxels.map((voxel) => {
+        const dimensions = voxelDimensions(voxel, plan.voxelSize);
+        return {
+          voxel,
+          depth: (voxel.x + dimensions[0] / 2 - centerX) * viewX + (voxel.y + dimensions[1] / 2 - centerY) * viewY + (voxel.z + dimensions[2] / 2 - centerZ) * viewZ
+        };
+      });
       sorted.sort((a, b) => a.depth - b.depth);
       for (const item of sorted) {
         const voxel = item.voxel;
@@ -1185,9 +1365,10 @@ ${fragmentMarker}`);
       const x0 = voxel.x;
       const y0 = voxel.y;
       const z0 = voxel.z;
-      const x1 = x0 + size;
-      const y1 = y0 + size;
-      const z1 = z0 + size;
+      const dimensions = voxelDimensions(voxel, size);
+      const x1 = x0 + dimensions[0];
+      const y1 = y0 + dimensions[1];
+      const z1 = z0 + dimensions[2];
       let points;
       if (face.axis === "x") {
         const x = face.positive ? x1 : x0;
@@ -1216,33 +1397,40 @@ ${fragmentMarker}`);
   };
 
   // src/ui/generator_dialog.ts
+  function groupScaleMarkup(group) {
+    return '<fieldset class="texture-model-scale-group"><legend>' + tr("group." + group) + '</legend><div class="texture-model-axis-fields">' + ["X", "Y", "Z"].map(
+      (axis) => "<label><span>" + axis + '</span><input data-field="' + group + "Scale" + axis + '" type="number" min="0.01" step="0.1" value="1" required></label>'
+    ).join("") + "</div></fieldset>";
+  }
   function buildMarkup() {
     return [
       '<div class="texture-model-shell"><div class="texture-model-columns">',
       '<div class="texture-model-controls">',
       "<section><h3>" + tr("section.texture") + "</h3>",
-      '<label class="texture-model-file">' + tr("field.choose_texture") + ' <input data-field="file" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label>',
-      '<span data-output="filename">' + tr("field.no_image") + "</span>",
-      '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr("field.thumbnail_alt") + '" hidden></section>',
+      '<div class="texture-model-import"><label class="texture-model-file">',
+      '<span class="material-icons" aria-hidden="true">add_photo_alternate</span><span>' + tr("field.choose_texture") + "</span>",
+      '<input data-field="file" type="file" accept="image/png,.png" aria-label="' + tr("field.choose_texture") + '"></label>',
+      '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr("field.thumbnail_alt") + '" hidden></div>',
+      '<span data-output="filename" class="texture-model-filename" hidden></span></section>',
       "<section><h3>" + tr("section.settings") + "</h3>",
-      "<label>" + tr("field.processing_mode") + ' <select data-field="processingMode"><option value="row">' + tr("field.row_mode") + '</option><option value="pixel">' + tr("field.pixel_mode") + "</option></select></label>",
-      "<label>" + tr("field.voxel_size") + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1"></label>',
-      "<label>" + tr("field.alpha_threshold") + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0"></label>',
+      "<label>" + tr("field.orientation") + ' <span class="texture-model-select"><select data-field="orientation"><option value="upright" selected>' + tr("field.upright") + '</option><option value="flat">' + tr("field.flat") + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">\u25BE</span></span></label>',
+      "<label>" + tr("field.processing_mode") + ' <span class="texture-model-select"><select data-field="processingMode"><option value="pixel" selected>' + tr("field.pixel_mode") + '</option><option value="row">' + tr("field.row_mode") + '</option><option value="column">' + tr("field.column_mode") + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">\u25BE</span></span></label>',
+      "<label>" + tr("field.voxel_size") + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1" required></label>',
+      "<label>" + tr("field.alpha_threshold") + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0" required></label>',
       '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr("field.include_transparent") + "</label>",
       '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr("field.center_model") + "</label>",
       "<label>" + tr("field.group_name") + ' <input data-field="groupName" type="text" value="texture_model"></label>',
+      '<label class="texture-model-checkbox"><input data-field="splitOuterRing" type="checkbox"> ' + tr("field.split_outer_ring") + "</label>",
+      '<fieldset data-output="groupSettings" class="texture-model-group-settings" hidden disabled>',
+      "<legend>" + tr("field.group_scale") + "</legend>",
+      groupScaleMarkup("outer"),
+      groupScaleMarkup("inner"),
+      "<small>" + tr("note.group_scale") + "</small></fieldset>",
       "<details><summary>" + tr("section.advanced") + "</summary>",
-      "<label>" + tr("field.max_cubes") + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000"></label>',
+      "<label>" + tr("field.max_cubes") + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
       "<small>" + tr("note.performance") + "</small></details></section>",
-      '<section class="texture-model-stats"><h3>' + tr("section.stats") + "</h3>",
-      "<div>" + tr("stats.image_dimensions") + ' <strong data-output="dimensions">\u2014</strong></div>',
-      "<div>" + tr("stats.total_pixels") + ' <strong data-output="totalPixels">\u2014</strong></div>',
-      "<div>" + tr("stats.visible_pixels") + ' <strong data-output="visiblePixels">\u2014</strong></div>',
-      "<div>" + tr("stats.expected_cubes") + ' <strong data-output="voxelCount">\u2014</strong></div>',
-      "<div>" + tr("stats.model_dimensions") + ' <strong data-output="modelSize">\u2014</strong></div></section>',
-      '<p class="texture-model-status" data-output="status" role="status">' + tr("status.choose_image") + "</p>",
-      '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr("action.preview") + "</button>",
-      '<button type="button" data-action="generate" disabled>' + tr("action.generate") + "</button></div>",
+      '<p class="texture-model-status" data-output="status" role="status" hidden></p>',
+      '<div class="texture-model-actions"><button type="button" data-action="generate" disabled>' + tr("action.generate") + "</button></div>",
       '</div><div class="texture-model-preview-wrap">',
       '<canvas data-output="preview" class="texture-model-preview" aria-label="' + tr("preview.aria_label") + '"></canvas>',
       "<p>" + tr("preview.controls") + "</p></div></div></div>"
@@ -1261,9 +1449,17 @@ ${fragmentMarker}`);
       this.dialog = dialog;
       this.onGenerate = onGenerate;
       this.cleanup = [];
+      this.disposed = false;
       this.revision = 0;
       this.previewRevision = -1;
       this.root = required(dialog.object, ".texture-model-shell");
+      this.field("file").value = "";
+      this.output("filename").hidden = true;
+      this.output("thumbnail").hidden = true;
+      this.output("thumbnail").removeAttribute("src");
+      this.clearPreview();
+      this.setStatus("");
+      this.updateGroupFields();
       this.bind();
       this.updateState();
     }
@@ -1283,75 +1479,134 @@ ${fragmentMarker}`);
       });
       for (const name of [
         "processingMode",
+        "orientation",
         "voxelSize",
         "alphaThreshold",
         "includeTransparent",
         "centerModel",
         "groupName",
-        "maxVoxels"
+        "maxVoxels",
+        "splitOuterRing",
+        "outerScaleX",
+        "outerScaleY",
+        "outerScaleZ",
+        "innerScaleX",
+        "innerScaleY",
+        "innerScaleZ"
       ]) {
         const field = this.field(name);
-        this.listen(field, "input", () => this.invalidate());
-        this.listen(field, "change", () => this.invalidate());
+        const event = field.tagName === "SELECT" || field.type === "checkbox" ? "change" : "input";
+        this.listen(field, event, () => {
+          this.updateGroupFields();
+          this.schedulePreview();
+        });
       }
-      this.listen(required(this.root, '[data-action="preview"]'), "click", () => {
-        void this.preview();
-      });
       this.listen(required(this.root, '[data-action="generate"]'), "click", () => {
         this.generate();
       });
     }
-    replaceTask() {
-      this.token?.cancel();
-      this.token = new CancellationToken();
-      return this.token;
+    updateGroupFields() {
+      const enabled = this.field("splitOuterRing").checked;
+      const settings = this.output("groupSettings");
+      settings.hidden = !enabled;
+      settings.disabled = !enabled;
     }
-    invalidate() {
+    invalidatePreview() {
       this.revision += 1;
       this.previewRevision = -1;
       this.plan = void 0;
-      this.replaceTask();
-      this.renderer?.dispose();
-      this.renderer = void 0;
-      this.updateState();
+      this.previewToken?.cancel();
+      this.previewToken = void 0;
+      if (this.previewFrame !== void 0) cancelAnimationFrame(this.previewFrame);
+      this.previewFrame = void 0;
+      required(this.root, '[data-action="generate"]').disabled = true;
+    }
+    setPreviewBusy(busy) {
+      this.output("preview").setAttribute("aria-busy", String(busy));
+    }
+    clearPreview() {
+      if (this.renderer) this.renderer.clear();
+      else {
+        const canvas = this.output("preview");
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      this.setPreviewBusy(false);
+    }
+    schedulePreview() {
+      if (this.disposed) return;
+      this.invalidatePreview();
+      if (!this.image || !this.alphaHistogram) return;
+      if (!this.updateState()) {
+        this.clearPreview();
+        return;
+      }
+      this.setPreviewBusy(true);
+      this.previewFrame = requestAnimationFrame(() => {
+        this.previewFrame = void 0;
+        void this.preview();
+      });
     }
     async selectImage() {
+      if (this.disposed) return;
       const file = this.field("file").files?.[0];
-      this.invalidate();
+      this.decodeToken?.cancel();
+      this.decodeToken = void 0;
+      this.invalidatePreview();
       this.image = void 0;
       this.alphaHistogram = void 0;
+      this.clearPreview();
       const thumbnail = this.output("thumbnail");
       thumbnail.hidden = true;
       thumbnail.removeAttribute("src");
-      this.output("filename").textContent = file?.name ?? tr("field.no_image");
+      const filename = this.output("filename");
+      filename.textContent = file?.name ?? "";
+      filename.hidden = !file;
       this.updateState();
-      if (!file) return;
-      const token = this.replaceTask();
-      const revision = this.revision;
+      if (!file) {
+        this.setStatus("");
+        return;
+      }
+      const token = new CancellationToken();
+      this.decodeToken = token;
+      const groupName = this.field("groupName");
+      const previousGroupName = groupName.value;
       this.setStatus(tr("status.reading_image"));
+      this.setPreviewBusy(true);
       try {
         const image = await decodeImageFile(file, token);
-        if (token.cancelled || revision !== this.revision) return;
+        if (this.disposed || token.cancelled || this.decodeToken !== token) return;
         this.image = image;
         this.alphaHistogram = buildAlphaHistogram(image);
-        this.field("groupName").value = defaultGroupName(image.fileName);
+        if (groupName.value === previousGroupName) groupName.value = defaultGroupName(image.fileName);
         thumbnail.src = image.dataURL;
         thumbnail.hidden = false;
-        this.setStatus(tr("status.image_loaded"));
-        this.updateState();
+        this.schedulePreview();
       } catch (error) {
-        if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), "error");
+        if (!this.disposed && !token.cancelled && this.decodeToken === token && !(error instanceof TaskCancelledError)) {
+          this.clearPreview();
+          this.setStatus(messageOf(error), "error");
+        }
+      } finally {
+        if (this.decodeToken === token) this.decodeToken = void 0;
       }
     }
     options() {
+      const splitOuterRing = this.field("splitOuterRing").checked;
+      const scale = (group) => splitOuterRing ? [
+        this.field(group + "ScaleX").valueAsNumber,
+        this.field(group + "ScaleY").valueAsNumber,
+        this.field(group + "ScaleZ").valueAsNumber
+      ] : [1, 1, 1];
       const options = {
         processingMode: this.field("processingMode").value,
-        voxelSize: Number(this.field("voxelSize").value),
-        alphaThreshold: Number(this.field("alphaThreshold").value),
+        orientation: this.field("orientation").value,
+        grouping: { enabled: splitOuterRing, outerScale: scale("outer"), innerScale: scale("inner") },
+        voxelSize: this.field("voxelSize").valueAsNumber,
+        alphaThreshold: this.field("alphaThreshold").valueAsNumber,
         includeTransparent: this.field("includeTransparent").checked,
         centerModel: this.field("centerModel").checked,
         groupName: this.field("groupName").value.trim() || "texture_model",
-        maxVoxels: Number(this.field("maxVoxels").value)
+        maxVoxels: this.field("maxVoxels").valueAsNumber
       };
       validatePlannerOptions(options);
       validateMaxVoxels(options.maxVoxels);
@@ -1361,17 +1616,13 @@ ${fragmentMarker}`);
       const status = this.output("status");
       status.textContent = message;
       status.dataset.level = level;
+      status.hidden = !message;
     }
     updateState() {
-      const previewButton = required(this.root, '[data-action="preview"]');
       const generateButton = required(this.root, '[data-action="generate"]');
+      generateButton.disabled = true;
       if (!this.image || !this.alphaHistogram) {
-        for (const name of ["dimensions", "totalPixels", "visiblePixels", "voxelCount", "modelSize"]) {
-          this.output(name).textContent = "\u2014";
-        }
-        previewButton.disabled = true;
-        generateButton.disabled = true;
-        return;
+        return false;
       }
       try {
         const options = this.options();
@@ -1380,33 +1631,28 @@ ${fragmentMarker}`);
           options.alphaThreshold,
           options.includeTransparent
         );
-        this.output("dimensions").textContent = this.image.width + " \xD7 " + this.image.height;
-        this.output("totalPixels").textContent = String(counts.totalPixels);
-        this.output("visiblePixels").textContent = String(counts.visiblePixels);
-        this.output("voxelCount").textContent = String(counts.voxelCount);
-        this.output("modelSize").textContent = [
-          this.image.width * options.voxelSize,
-          this.image.height * options.voxelSize,
-          options.voxelSize
-        ].join(" \xD7 ");
         const limit = getVoxelLimitStatus(counts.voxelCount, options.maxVoxels);
-        previewButton.disabled = limit === "exceeded";
-        generateButton.disabled = limit === "exceeded" || !this.plan || this.previewRevision !== this.revision;
         if (limit === "exceeded") {
           this.setStatus(tr("status.over_limit", [counts.voxelCount, options.maxVoxels]), "error");
+          return false;
+        }
+        const ready = this.plan !== void 0 && this.previewRevision === this.revision;
+        generateButton.disabled = !ready;
+        if (!ready) {
+          this.setStatus(tr("status.planning"));
         } else if (limit === "warning") {
           this.setStatus(tr("status.performance_warning", [counts.voxelCount]), "warning");
-        } else if (this.previewRevision !== this.revision) {
-          this.setStatus(tr("status.preview_stale"));
+        } else {
+          this.setStatus(tr("status.preview_ready"));
         }
+        return true;
       } catch (error) {
-        previewButton.disabled = true;
-        generateButton.disabled = true;
         this.setStatus(messageOf(error), "error");
+        return false;
       }
     }
     async preview() {
-      if (!this.image || !this.alphaHistogram) return;
+      if (this.disposed || !this.image || !this.alphaHistogram) return;
       const image = this.image;
       let options;
       try {
@@ -1416,13 +1662,18 @@ ${fragmentMarker}`);
           options.alphaThreshold,
           options.includeTransparent
         ).voxelCount;
-        if (getVoxelLimitStatus(count, options.maxVoxels) === "exceeded") return;
+        if (getVoxelLimitStatus(count, options.maxVoxels) === "exceeded") {
+          this.clearPreview();
+          this.setStatus(tr("status.over_limit", [count, options.maxVoxels]), "error");
+          return;
+        }
       } catch (error) {
+        this.clearPreview();
         this.setStatus(messageOf(error), "error");
         return;
       }
-      this.invalidate();
-      const token = this.replaceTask();
+      const token = new CancellationToken();
+      this.previewToken = token;
       const revision = this.revision;
       let lastPercent = -1;
       this.setStatus(tr("status.planning"));
@@ -1431,25 +1682,27 @@ ${fragmentMarker}`);
           token,
           onProgress: (processed, total) => {
             const percent = Math.round(processed / total * 100);
-            if (!token.cancelled && percent !== lastPercent) {
+            if (!this.disposed && !token.cancelled && revision === this.revision && percent !== lastPercent) {
               lastPercent = percent;
               this.setStatus(tr("status.planning") + " " + percent + "%");
             }
           }
         });
-        if (token.cancelled || revision !== this.revision) return;
-        this.renderer = new PreviewRenderer(this.output("preview"));
+        if (this.disposed || token.cancelled || revision !== this.revision) return;
+        this.renderer ?? (this.renderer = new PreviewRenderer(this.output("preview")));
         this.renderer.render(plan);
         this.plan = plan;
         this.previewRevision = revision;
+        this.setPreviewBusy(false);
         this.updateState();
-        if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === "ok") {
-          this.setStatus(tr("status.preview_ready", [plan.voxelCount]));
-        }
       } catch (error) {
+        if (this.disposed || token.cancelled || revision !== this.revision) return;
         this.renderer?.dispose();
         this.renderer = void 0;
+        this.clearPreview();
         if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), "error");
+      } finally {
+        if (this.previewToken === token) this.previewToken = void 0;
       }
     }
     generate() {
@@ -1471,7 +1724,11 @@ ${fragmentMarker}`);
       this.renderer?.resize();
     }
     dispose() {
-      this.token?.cancel();
+      this.disposed = true;
+      this.decodeToken?.cancel();
+      this.decodeToken = void 0;
+      this.invalidatePreview();
+      this.setPreviewBusy(false);
       this.renderer?.dispose();
       this.renderer = void 0;
       for (const cleanup of this.cleanup) cleanup();
@@ -1521,25 +1778,55 @@ ${fragmentMarker}`);
   padding: 14px;
   color: var(--color-text);
 }
-.texture-model-columns { display: grid; grid-template-columns: minmax(310px, 1fr) minmax(300px, 1.2fr); gap: 16px; }
+.texture-model-columns { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(300px, 1.2fr); gap: 16px; }
 .texture-model-controls { max-height: min(75vh, 720px); overflow: auto; padding-right: 8px; }
 .texture-model-controls section { margin-bottom: 14px; }
 .texture-model-controls h3 { margin: 0 0 8px; font-size: 15px; }
 .texture-model-controls label { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 7px 0; }
 .texture-model-controls label input[type=number], .texture-model-controls label input[type=text],
-.texture-model-controls label select { width: 130px; min-width: 0; }
+.texture-model-controls label select { width: 160px; min-width: 0;
+  box-sizing: border-box; min-height: 32px; padding: 5px 9px;
+  border: 1px solid var(--color-accent); border-radius: 4px;
+  background: var(--color-back); color: var(--color-text); }
+.texture-model-controls label input:focus-visible,
+.texture-model-controls label select:focus-visible {
+  outline: 2px solid var(--color-accent); outline-offset: 2px;
+}
+.texture-model-select { position: relative; display: inline-flex; width: 160px; flex-shrink: 0; }
+.texture-model-controls .texture-model-select select {
+  width: 100%; appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer;
+}
+.texture-model-select-arrow {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--color-accent); font-size: 20px; line-height: 1; pointer-events: none;
+}
 .texture-model-controls .texture-model-checkbox { justify-content: flex-start; }
-.texture-model-controls .texture-model-file { justify-content: flex-start; cursor: pointer; }
-.texture-model-controls .texture-model-file input { max-width: 190px; }
-.texture-model-thumbnail { display: block; max-width: 100%; max-height: 110px; margin: 8px 0; image-rendering: pixelated; }
-.texture-model-thumbnail[hidden] { display: none; }
-.texture-model-stats div { display: flex; justify-content: space-between; margin: 4px 0; }
-.texture-model-status { min-height: 2.5em; margin: 9px 0; }
+.texture-model-group-settings { margin: 8px 0; padding: 10px; border: 1px solid var(--color-accent); border-radius: 5px; min-width: 0; }
+.texture-model-scale-group { margin: 0 0 8px; padding: 0; border: 0; min-width: 0; }
+.texture-model-axis-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.texture-model-controls .texture-model-axis-fields label { gap: 4px; }
+.texture-model-controls .texture-model-axis-fields input[type=number] { width: 100%; min-width: 0; }
+.texture-model-import { display: flex; align-items: center; gap: 12px; }
+.texture-model-controls .texture-model-file {
+  position: relative; display: inline-flex; justify-content: center; flex: 1;
+  min-height: 42px; margin: 0; padding: 8px 12px; box-sizing: border-box;
+  border: 1px dashed var(--color-accent); border-radius: 5px;
+  background: var(--color-back); cursor: pointer;
+}
+.texture-model-file:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.texture-model-controls .texture-model-file input {
+  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
+}
+.texture-model-thumbnail { display: block; width: 42px; height: 42px; object-fit: contain; image-rendering: pixelated; }
+.texture-model-filename { display: block; margin-top: 6px; overflow-wrap: anywhere; font-size: 12px; }
+.texture-model-shell [hidden] { display: none !important; }
+.texture-model-status { margin: 9px 0; }
 .texture-model-status[data-level=warning] { color: #e0ac37; }
 .texture-model-status[data-level=error] { color: #e56363; }
 .texture-model-actions { display: flex; gap: 8px; }
 .texture-model-preview-wrap { min-height: 340px; display: flex; flex-direction: column; }
 .texture-model-preview { flex: 1; display: block; width: 100%; min-height: 300px; background: #20252b; border-radius: 6px; cursor: grab; }
+.texture-model-preview[aria-busy=true] { opacity: .55; }
 .texture-model-preview-wrap p { text-align: center; margin: 6px 0; opacity: .7; }
 @media (max-width: 750px) { .texture-model-columns { grid-template-columns: 1fr; } }
 `;
@@ -1547,7 +1834,6 @@ ${fragmentMarker}`);
   // src/index.ts
   var generatorDialog;
   var generatorAction;
-  var aboutAction;
   var textureMenu;
   var style;
   registerTranslations();
@@ -1557,7 +1843,7 @@ ${fragmentMarker}`);
     tags: ["Texture", "Modeling", "Tool"],
     description: tr("plugin.description"),
     icon: "view_in_ar",
-    version: "0.1.0",
+    version: "0.2.0-pre",
     variant: "both",
     min_version: "5.1.0",
     onload() {
@@ -1573,18 +1859,7 @@ ${fragmentMarker}`);
           generatorDialog.dialog.show();
         }
       });
-      aboutAction = new Action("texture_model_about", {
-        name: tr("menu.about"),
-        icon: "info",
-        click() {
-          Blockbench.showMessageBox({
-            title: tr("about.title"),
-            message: tr("about.message"),
-            buttons: [tr("dialog.ok")]
-          });
-        }
-      });
-      textureMenu = new BarMenu("texture_model_menu", [generatorAction, aboutAction], {
+      textureMenu = new BarMenu("texture_model_menu", [generatorAction], {
         name: tr("menu.title"),
         icon: "view_in_ar"
       });
@@ -1597,8 +1872,6 @@ ${fragmentMarker}`);
       textureMenu = void 0;
       generatorAction?.delete();
       generatorAction = void 0;
-      aboutAction?.delete();
-      aboutAction = void 0;
       style?.delete();
       style = void 0;
     }

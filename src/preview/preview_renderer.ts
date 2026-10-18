@@ -1,5 +1,6 @@
 import type { BufferGeometry, InstancedMesh, Material, OrthographicCamera, Scene, WebGLRenderer } from 'three';
 import { tr } from '../i18n';
+import { voxelDimensions } from '../domain/pixel_groups';
 import type { ModelPlan, VoxelPlan } from '../types';
 
 const BACKGROUND = '#1b1d25';
@@ -81,6 +82,13 @@ export class PreviewRenderer {
     this.drawFrame();
   }
 
+  clear(): void {
+    if (this.disposed) return;
+    this.plan = null;
+    this.releaseModel();
+    this.drawFrame();
+  }
+
   resize(): void {
     if (this.disposed) return;
     const width = Math.max(1, Math.round(this.canvas.clientWidth || (this.width > 1 ? this.width : this.canvas.width || 640)));
@@ -153,7 +161,7 @@ export class PreviewRenderer {
     if (!this.scene || !three) return;
     const count = plan.voxels.length;
     const size = plan.voxelSize;
-    const geometry = new three.BoxGeometry(size, size, size);
+    const geometry = new three.BoxGeometry(1, 1, 1);
     this.geometry = geometry;
     const alpha = new Float32Array(count);
     geometry.setAttribute('instanceAlpha', new three.InstancedBufferAttribute(alpha, 1));
@@ -181,7 +189,9 @@ export class PreviewRenderer {
     for (let index = 0; index < count; index += 1) {
       const voxel = plan.voxels[index];
       if (!voxel) continue;
-      matrix.makeTranslation(voxel.x + size / 2, voxel.y + size / 2, voxel.z + size / 2);
+      const dimensions = voxelDimensions(voxel, size);
+      matrix.makeScale(dimensions[0], dimensions[1], dimensions[2]);
+      matrix.setPosition(voxel.x + dimensions[0] / 2, voxel.y + dimensions[1] / 2, voxel.z + dimensions[2] / 2);
       mesh.setMatrixAt(index, matrix);
       color.setRGB(voxel.rgba.r / 255, voxel.rgba.g / 255, voxel.rgba.b / 255);
       mesh.setColorAt(index, color);
@@ -303,12 +313,15 @@ export class PreviewRenderer {
         y: this.height / 2 - (-sinYaw * sinPitch * dx + cosPitch * dy - cosYaw * sinPitch * dz) * scale
       };
     };
-    const sorted = plan.voxels.map((voxel) => ({
-      voxel,
-      depth: (voxel.x + plan.voxelSize / 2 - centerX) * viewX
-        + (voxel.y + plan.voxelSize / 2 - centerY) * viewY
-        + (voxel.z + plan.voxelSize / 2 - centerZ) * viewZ
-    }));
+    const sorted = plan.voxels.map((voxel) => {
+      const dimensions = voxelDimensions(voxel, plan.voxelSize);
+      return {
+        voxel,
+        depth: (voxel.x + dimensions[0] / 2 - centerX) * viewX
+          + (voxel.y + dimensions[1] / 2 - centerY) * viewY
+          + (voxel.z + dimensions[2] / 2 - centerZ) * viewZ
+      };
+    });
     sorted.sort((a, b) => a.depth - b.depth);
     for (const item of sorted) {
       const voxel = item.voxel;
@@ -332,9 +345,10 @@ export class PreviewRenderer {
     const x0 = voxel.x;
     const y0 = voxel.y;
     const z0 = voxel.z;
-    const x1 = x0 + size;
-    const y1 = y0 + size;
-    const z1 = z0 + size;
+    const dimensions = voxelDimensions(voxel, size);
+    const x1 = x0 + dimensions[0];
+    const y1 = y0 + dimensions[1];
+    const z1 = z0 + dimensions[2];
     let points: ProjectedPoint[];
     if (face.axis === 'x') {
       const x = face.positive ? x1 : x0;

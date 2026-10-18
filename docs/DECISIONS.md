@@ -20,7 +20,7 @@ Sources: [Cube face rendering](https://github.com/JannisX11/blockbench/blob/v5.2
 
 The writer uses one Undo.initEdit followed by one Undo.finishEdit. The same mutable aspects object tracks the new Texture, Group, and Cubes before they enter host collections. Texture.add(false) avoids a nested Undo. Undo.cancelEdit(true) reverts a failed write.
 
-The confirmed ModelPlan is built asynchronously in complete-row or pixel batches. The Blockbench write stays synchronous. We found no supported guarantee that an open Undo edit can safely cross arbitrary asynchronous UI yields; preserving a complete one-step Undo has priority. Cube.init already prepares geometry, faces, and UV, so the writer performs no redundant full Canvas refresh.
+The confirmed ModelPlan is built asynchronously in pixel batches (the default), complete-row batches, or complete-column batches. The Blockbench write stays synchronous. We found no supported guarantee that an open Undo edit can safely cross arbitrary asynchronous UI yields; preserving a complete one-step Undo has priority. Cube.init already prepares geometry, faces, and UV, so the writer performs no redundant full Canvas refresh.
 
 Sources: [Undo implementation](https://github.com/JannisX11/blockbench/blob/v5.2.1/js/undo.js), [Cube initialization](https://github.com/JannisX11/blockbench/blob/v5.2.1/js/outliner/types/cube.js).
 
@@ -28,6 +28,6 @@ Sources: [Undo implementation](https://github.com/JannisX11/blockbench/blob/v5.2
 
 Preview reads only ModelPlan, with one InstancedMesh rather than one Three Mesh per Cube. Blockbench's Three r129 instance colors contain RGB only, so a custom instance alpha attribute carries the original pixel alpha. The renderer uses an offscreen WebGL canvas and presents it in the Dialog canvas; Canvas 2D isometric drawing is the fallback. Preview lighting and material behavior remain a visual approximation of the generated texture.
 
-The renderer releases geometry, material, mesh, WebGL context, animation frame, and pointer listeners on replacement, close, error, and plugin unload. Cancelling a superseded decode/plan task prevents stale results from replacing a newer preview.
+Live updates replace geometry, material, and mesh while retaining the renderer, rotation, zoom, and WebGL context. Invalid inputs clear the stale model. Close, error, and plugin unload release the full renderer and its listeners. File decoding and model planning have separate cancellation tokens. Each planning revision owns its progress, results, and errors, preventing cancelled work from replacing or disposing a newer preview. The controller coalesces edits within a display frame and cancels queued frames on replacement or close.
 
 Source: [Three r129 InstancedMesh](https://github.com/mrdoob/three.js/blob/r129/src/objects/InstancedMesh.js).

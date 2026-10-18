@@ -32,11 +32,26 @@ export function validatePixelImage(image: PixelImage): void {
 }
 
 export function validatePlannerOptions(options: ModelPlannerOptions): void {
-  if (options.processingMode !== 'row' && options.processingMode !== 'pixel') {
-    throw new ModelValidationError('Processing mode must be row or pixel.', 'error.processing_mode');
+  if (options.processingMode !== 'row' && options.processingMode !== 'pixel' &&
+      options.processingMode !== 'column') {
+    throw new ModelValidationError('Processing mode must be pixel, row, or column.', 'error.processing_mode');
   }
   if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
     throw new ModelValidationError('Voxel size must be greater than zero.', 'error.voxel_size');
+  }
+  if (options.orientation !== undefined && options.orientation !== 'upright' &&
+      options.orientation !== 'flat') {
+    throw new ModelValidationError('Model orientation must be upright or flat.', 'error.orientation');
+  }
+  const grouping = options.grouping;
+  if (grouping !== undefined) {
+    if (typeof grouping.enabled !== 'boolean') {
+      throw new ModelValidationError('Pixel grouping must be enabled or disabled.', 'error.grouping');
+    }
+    if (grouping.enabled && [grouping.outerScale, grouping.innerScale].some((scale) =>
+      !Array.isArray(scale) || scale.length !== 3 || !scale.every((value) => Number.isFinite(value) && value > 0))) {
+      throw new ModelValidationError('Each group needs positive finite X, Y, and Z scales.', 'error.group_scale');
+    }
   }
   validateAlphaThreshold(options.alphaThreshold);
   if (typeof options.includeTransparent !== 'boolean' ||
