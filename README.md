@@ -36,7 +36,7 @@ npm run build
 4. Adjust the options; the preview updates automatically on every edit. Drag to rotate and use the wheel to zoom.
 5. Review the preview and click **Generate in Workspace**.
 
-The generated texture and all Cubes are placed under one new root Group. One Undo removes the entire generation; Redo restores it.
+All Cubes are placed under one new root Group with one shared texture. Enabling Separate outer-ring pixels creates nonempty Outer pixels and Inner pixels subgroups inside it. One Undo removes the entire generation; Redo restores it.
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -46,10 +46,14 @@ The generated texture and all Cubes are placed under one new root Group. One Und
 | Alpha Threshold | 0 | Generate when source alpha is strictly greater than the threshold. |
 | Include Transparent | Off | When on, every pixel gets a Cube and retains its original texture alpha. |
 | Center Model | On | Center the occupied voxel bounds near the origin. |
+| Separate outer-ring pixels | Off | Detect the effective silhouette; create outer/inner subgroups inside the root group. |
+| Group scale | X/Y/Z = 1 | Scale each subgroup independently around its own center along world X, Y, Z. Values must be greater than zero. |
 | Group Name | Image stem + `_texture_model` | Name is made unique if needed. |
 | Maximum Cubes | 20,000 | Editable from 1,000 to 100,000 in Advanced Settings. |
 
 Changes to any generation option automatically refresh the preview. Generate is available when the latest preview is ready. Rapid edits cancel older calculations, and updates preserve rotation and zoom. Invalid inputs or counts over the limit clear the outdated preview and disable generation. Preview creates no Blockbench Cube, Group, or Texture. Preview colors are a lightweight visual approximation; the generated model uses the original image texture.
+
+Outer-ring detection follows pixels whose alpha is above the threshold and touches the image exterior through four-connected background. Transparent padding does not change the contour; enclosed holes do not create another outer ring. If Include Transparent is on, extra filtered/transparent pixels go to the inner group without changing the detected contour. Scaling happens after model centering and updates positions, per-axis Cube dimensions, bounds, and both preview paths. Empty subgroups are omitted. All grouping and scale edits update the preview automatically.
 
 ### Performance
 
@@ -63,7 +67,7 @@ The image-to-plan stage yields to the UI in batches and can be cancelled. The fi
 npm run build
 ~~~
 
-The current development target is **0.2.0**, with **0.2.0-dev3** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
+The current development target is **0.2.0**, with **0.2.0-dev4** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
 
 Use **LSP diagnostics only** for syntax and type feedback. Do not run typecheck commands, Lint, tests, or plugin runtime verification. `npm run build` only packages the installable plugin with esbuild. Existing test sources are historical and must not be run. Runtime acceptance is performed by the user; see [docs/TESTING.md](docs/TESTING.md).
 
@@ -107,7 +111,7 @@ npm run build
 4. 调整参数，每次输入或选项变化都会自动更新预览。拖动可旋转，滚动滚轮可缩放。
 5. 确认预览后，点击 **生成到工作区**。
 
-生成的纹理和所有 Cube 都会放入一个新建的根 Group。执行一次撤销即可移除本次生成的全部内容；重做可恢复。
+所有 Cube 放入新建的根 Group，并共享一张纹理。开启“外圈像素单独分组”后，会在总组内创建非空的“外圈像素”和“内部像素”子组。执行一次撤销即可移除本次生成的全部内容；重做可恢复。
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -117,10 +121,14 @@ npm run build
 | 透明度阈值 | 0 | 仅当原像素 alpha 严格大于阈值时生成。 |
 | 包含透明像素 | 关闭 | 开启后每个像素都会生成 Cube，并保留原纹理透明度。 |
 | 居中模型 | 开启 | 将已生成体素的边界中心移到世界原点附近。 |
+| 外圈像素单独分组 | 关闭 | 按有效像素图案外轮廓检测，在总组内创建外圈与内部子组。 |
+| 分组缩放 | XYZ 均为 1 | 各组围绕自身中心，沿世界 X、Y、Z 轴独立缩放；数值必须大于零。 |
 | Group 名称 | 图片文件名 + `_texture_model` | 名称冲突时会自动生成唯一名称。 |
 | Cube 数量上限 | 20,000 | 可在“高级设置”中调整为 1,000 至 100,000。 |
 
 修改任何生成参数都会自动更新预览，最新预览就绪后即可生成。连续操作会取消旧计算，更新时保留旋转和缩放视角。输入无效或超出数量上限时，清除过期预览并禁用生成。预览不会创建 Blockbench Cube、Group 或 Texture。预览颜色是轻量级视觉近似；最终模型使用原始图片纹理。
+
+外圈检测使用透明度阈值过滤后的图案，以四邻接方式查找与图片外部相邻的像素，透明留白不影响轮廓，封闭孔洞的内边缘不算外圈。开启“包含透明像素”后，额外生成的透明或被阈值过滤的像素归入内部组，不改变外轮廓。分组缩放在模型居中后进行，同时调整位置、各轴体素尺寸、边界和两种预览路径；不创建空子组。所有分组与缩放操作都会自动更新预览。
 
 ### 性能
 
@@ -134,7 +142,7 @@ Cube 数量随符合条件的像素数增加：全不透明的 128 × 128 图片
 npm run build
 ~~~
 
-当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev3** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
+当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev4** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
 
 **只允许 LSP 语法和类型诊断**，禁止运行类型检查命令、Lint、任何代码测试或插件运行验证。`npm run build` 仅通过 esbuild 打包安装文件。已有测试源码仅保留历史记录，不得运行。实际功能由用户亲自验收，见 [docs/TESTING.md](docs/TESTING.md)。
 

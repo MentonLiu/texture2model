@@ -1,5 +1,12 @@
 export type ProcessingMode = 'pixel' | 'row' | 'column';
 export type ModelOrientation = 'upright' | 'flat';
+export type PixelGroup = 'outer' | 'inner';
+
+export interface PixelGrouping {
+  enabled: boolean;
+  outerScale: Vector3;
+  innerScale: Vector3;
+}
 
 export interface RgbaPixel {
   r: number;
@@ -28,6 +35,7 @@ export interface ModelPlannerOptions {
   processingMode: ProcessingMode;
   /** Omitted by older callers: defaults to upright. */
   orientation?: ModelOrientation;
+  grouping?: PixelGrouping;
   voxelSize: number;
   alphaThreshold: number;
   includeTransparent: boolean;
@@ -54,6 +62,9 @@ export interface VoxelPlan {
   z: number;
   sourceX: number;
   sourceY: number;
+  group?: PixelGroup;
+  /** Actual dimensions after per-group scaling; omitted for unscaled legacy plans. */
+  size?: Vector3;
   rgba: RgbaPixel;
 }
 
@@ -64,6 +75,7 @@ export interface ModelPlan {
   voxelSize: number;
   /** Older plans without this field are upright. */
   orientation?: ModelOrientation;
+  grouping?: PixelGrouping;
   voxelCount: number;
   bounds: ModelBounds;
   voxels: VoxelPlan[];

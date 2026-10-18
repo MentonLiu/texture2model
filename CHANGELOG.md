@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-dev4 — Outer-ring groups and scale / 外圈分组与缩放
+
+- Add opt-in detection of the effective pixel silhouette’s outer ring, ignoring transparent padding and enclosed hole edges.
+- Create nonempty outer/inner subgroups inside the root Group, sharing one texture and one Undo/Redo transaction.
+- Add independent XYZ scales for both subgroups, defaulting to 1 around each group’s occupied center. Update actual box dimensions, positions, bounds, WebGL and Canvas previews, and workspace generation together.
+- Keep automatic previews and cancellable detection. Deliver on `dev` with LSP diagnostics and esbuild packaging only; user runtime acceptance remains pending.
+
+- 新增“外圈像素单独分组”，按有效像素图案外轮廓识别，不受透明留白影响，封闭孔洞内边缘不算外圈。
+- 外圈、内部的非空子组包含在总组内，共享纹理并纳入同一次撤销/重做。
+- 各组分别提供 XYZ 缩放，默认为 1，围绕各组自身中心缩放；体素尺寸、位置、边界、两种预览和最终生成同步更新。
+- 保留实时预览与可取消检测，仅进行 LSP 诊断和 esbuild 打包，在 `dev` 交付，等待用户亲自验收。
+
 ## 0.2.0-dev3 — Live preview / 实时预览
 
 - Remove the Preview button. PNG import and every settings edit now refresh the preview automatically, without waiting for a click or field blur.
