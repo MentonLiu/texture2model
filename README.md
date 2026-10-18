@@ -67,7 +67,7 @@ The image-to-plan stage yields to the UI in batches and can be cancelled. The fi
 npm run build
 ~~~
 
-The current development target is **0.2.0**, with **0.2.0-dev4** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
+The current preview release is **0.2.0-pre** (tag `v0.2.0-pre`), released from `main` with explicit user authorization. Download the installable plugin from the [GitHub prerelease](https://github.com/MentonLiu/texture2model/releases/tag/v0.2.0-pre). Further development continues on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
 
 Use **LSP diagnostics only** for syntax and type feedback. Do not run typecheck commands, Lint, tests, or plugin runtime verification. `npm run build` only packages the installable plugin with esbuild. Existing test sources are historical and must not be run. Runtime acceptance is performed by the user; see [docs/TESTING.md](docs/TESTING.md).
 
@@ -142,7 +142,7 @@ Cube 数量随符合条件的像素数增加：全不透明的 128 × 128 图片
 npm run build
 ~~~
 
-当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev4** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
+当前预览版本为 **0.2.0-pre**，标签为 `v0.2.0-pre`，已获用户明确授权从 `main` 发布。可在 [GitHub 预发布页面](https://github.com/MentonLiu/texture2model/releases/tag/v0.2.0-pre)下载安装文件，后续开发继续在 `dev` 进行。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
 
 **只允许 LSP 语法和类型诊断**，禁止运行类型检查命令、Lint、任何代码测试或插件运行验证。`npm run build` 仅通过 esbuild 打包安装文件。已有测试源码仅保留历史记录，不得运行。实际功能由用户亲自验收，见 [docs/TESTING.md](docs/TESTING.md)。
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0-pre — Preview release / 预览版本 — 2026-10-18
+
+Tag: `v0.2.0-pre`. Consolidates development builds `0.2.0-dev1` through `0.2.0-dev4`, merged from `dev` into `main` with explicit user authorization.
+
+- Restrict imports to PNG and simplify the import area, remove statistics and About, and highlight editable controls and dropdown arrows.
+- Default to pixel processing, with row and column processing available. Support upright and lying-flat model orientation.
+- Automatically preview after import and on every edit, cancel obsolete calculations, and retain rotation and zoom across updates.
+- Optionally group the effective silhouette’s outer ring and inner pixels beneath one root Group. Give each subgroup independent XYZ scales around its own center, synchronized with preview and generation.
+- Preserve shared source-texture UVs and a single Undo/Redo transaction across the complete hierarchy.
+- Validation is limited to LSP syntax/type diagnostics and esbuild packaging. No typecheck commands, Lint, automated tests, or plugin runtime tests were run; runtime acceptance remains unverified.
+
+标签为 `v0.2.0-pre`，汇总 `0.2.0-dev1` 至 `0.2.0-dev4`，已获用户明确授权从 `dev` 合并至 `main` 发布。
+
+- 仅导入 PNG，精简纹理导入区，移除统计及“关于”入口，突出输入框与下拉箭头。
+- 默认按像素处理，保留按行、按列处理，支持立着放和躺着放。
+- 导入与每次参数操作自动更新预览，取消旧任务并保留旋转、缩放视角。
+- 支持图案有效外轮廓分组：总组内包含外圈和内部子组，各组可独立调整 XYZ 缩放，预览与生成同步。
+- 保留共享纹理 UV，整个层级纳入同一次撤销和重做。
+- 验证仅限 LSP 语法/类型诊断和 esbuild 打包，未运行类型检查命令、Lint、自动化测试或插件运行测试，不宣称功能验收通过。
+
 ## 0.2.0-dev4 — Outer-ring groups and scale / 外圈分组与缩放
 
 - Add opt-in detection of the effective pixel silhouette’s outer ring, ignoring transparent padding and enclosed hole edges.
