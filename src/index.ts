@@ -16,7 +16,7 @@ BBPlugin.register('texture_model', {
   tags: ['Texture', 'Modeling', 'Tool'],
   description: tr('plugin.description'),
   icon: 'view_in_ar',
-  version: '0.2.0-dev4',
+  version: '0.2.0-pre',
   variant: 'both',
   min_version: '5.1.0',
   onload() {
