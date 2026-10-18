@@ -39,6 +39,10 @@ export function validatePlannerOptions(options: ModelPlannerOptions): void {
   if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
     throw new ModelValidationError('Voxel size must be greater than zero.', 'error.voxel_size');
   }
+  if (options.orientation !== undefined && options.orientation !== 'upright' &&
+      options.orientation !== 'flat') {
+    throw new ModelValidationError('Model orientation must be upright or flat.', 'error.orientation');
+  }
   validateAlphaThreshold(options.alphaThreshold);
   if (typeof options.includeTransparent !== 'boolean' ||
       typeof options.centerModel !== 'boolean') {

@@ -8,6 +8,7 @@ export const DEFAULT_PIXEL_BATCH_SIZE = 256;
 
 export const DEFAULT_GENERATOR_OPTIONS: GeneratorOptions = {
   processingMode: 'pixel',
+  orientation: 'upright',
   voxelSize: 1,
   alphaThreshold: 0,
   includeTransparent: false,

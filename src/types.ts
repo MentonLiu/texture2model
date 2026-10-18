@@ -1,4 +1,5 @@
 export type ProcessingMode = 'pixel' | 'row' | 'column';
+export type ModelOrientation = 'upright' | 'flat';
 
 export interface RgbaPixel {
   r: number;
@@ -25,6 +26,8 @@ export interface DecodedImage extends PixelImage {
 
 export interface ModelPlannerOptions {
   processingMode: ProcessingMode;
+  /** Omitted by older callers: defaults to upright. */
+  orientation?: ModelOrientation;
   voxelSize: number;
   alphaThreshold: number;
   includeTransparent: boolean;
@@ -59,6 +62,8 @@ export interface ModelPlan {
   width: number;
   height: number;
   voxelSize: number;
+  /** Older plans without this field are upright. */
+  orientation?: ModelOrientation;
   voxelCount: number;
   bounds: ModelBounds;
   voxels: VoxelPlan[];
