@@ -1,49 +1,33 @@
-# Testing
+# 0.2.0-dev1 验证与用户验收
 
-## Automated results
+当前目标版本：0.2.0。开发测试版本：0.2.0-dev1，位于 `dev`。未经用户明确授权，不合并 `main`。
 
-As of 2026-10-05, local checks:
+## 验证边界
 
-| Check | Result | Scope |
+遵守 [AGENTS.md](../AGENTS.md) 与 [git.md](../git.md)：仅允许 LSP 语法和类型诊断、源代码差异审阅与 esbuild 打包。禁止 `tsc`、类型检查脚本、Lint、单元/集成/回归/冒烟测试及插件运行测试。已有 `tests/` 为历史文件，本轮不执行、不扩展。
+
+## 本轮交付记录
+
+| 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| npm run typecheck | PASS | TypeScript and blockbench-types 5.2.0 |
-| npm run lint | PASS | Source and tests |
-| npm run test | PASS | 21 tests: planning, transparency, Y mapping, row/pixel equivalence, cancellation, UV corners, naming, limit, writer host mocks, lifecycle host mocks |
-| npm run build | PASS | Single-file dist/texture_model.js |
-| Blockbench 5.2.0 desktop integration | PENDING | Local file load reached Blockbench's plugin trust warning; it was cancelled before executing the plugin |
+| LSP 语法/类型诊断 | 0 错误、0 警告 | TypeScript Language Server 6.0.2，使用项目 TypeScript 5.9.3，经 LSP 的 `initialize` / `didOpen` / `publishDiagnostics` 收到全部 16 个源文件诊断 |
+| 安装文件打包 | 已完成 | `npm run build` 成功，仅执行 esbuild 转译打包，不执行插件 |
+| 代码测试、Lint、类型检查命令 | 未运行 | 用户明确禁止 |
+| Blockbench 功能验收 | 等待用户亲自测试 | 不以 LSP 或打包成功替代功能验收 |
 
-Host mocks verify the intended API call sequence. They do **not** prove Blockbench visual output or native Undo behavior. The remaining manual checks are below.
+记录日期：2026-10-18。安装文件大小：74,469 字节。SHA-256：`a27cfc2914b71be5a1ef5f010321b97e2405a9250dccaf5b2a1c27c3c40f4947`。
 
-## Prepared textures
+## 用户亲自测试清单（智能体不执行）
 
-- rgb_transparent_2x2.png: top row red/green, bottom row blue/transparent.
-- corners_4x2.png: non-square image with different colors at all corners.
-- opaque_16x16.png, opaque_32x32.png, opaque_64x64.png, opaque_128x128.png: fully opaque performance cases.
+安装文件为 [dist/texture_model.js](../dist/texture_model.js)。在 Blockbench 的“文件 → 插件 → 从文件加载插件”中加载；若已安装旧版本，先卸载旧版再加载此文件。插件版本应显示 `0.2.0-dev1`。
 
-Regenerate the 4×2 and opaque fixtures with npm run fixtures.
+1. 新建支持 Cube 与逐面 UV 的通用模型项目，打开“纹理模型 → 打开纹理模型生成器…”。确认菜单只保留生成器入口，没有“关于纹理模型”；生成器没有统计信息区。
+2. 确认导入区只有“选择 PNG”、选中后的文件名及紧凑缩略图。选择合法 PNG；再尝试 JPEG、WebP、改名为 `.png` 的非 PNG 文件，确认被拒绝。
+3. 确认处理方式初始为“按像素”，下拉中有“按像素 / 按行 / 按列”；下拉箭头明显，数值和组名称输入框有醒目边框与键盘焦点提示。
+4. 使用 [corners_4x2.png](../tests/fixtures/corners_4x2.png) 分别选择三种处理方式，预览并生成。三种方式应有相同的几何位置、颜色和 UV；按列时组内 Cube 顺序按列排列，且能正常生成。
+5. 使用 [rgb_transparent_2x2.png](../tests/fixtures/rgb_transparent_2x2.png) 检查透明像素：默认生成 3 个 Cube；启用“包含透明像素”后生成 4 个。每个 Cube 六面采样同一个源像素。
+6. 修改体素尺寸、透明度阈值、处理方式后，应要求重新预览。清空数字输入应阻止预览与生成并显示提示。检查缩放、旋转、居中与组名称。
+7. 撤销一次应移除本次生成的纹理、Group 与所有 Cube；重做应恢复。关闭并重新打开生成器，应要求重新选择 PNG。重复更换图片、卸载和加载插件，确认没有重复菜单或旧任务结果。
+8. 使用 [opaque_128x128.png](../tests/fixtures/opaque_128x128.png) 检查性能提醒；在高级设置将 Cube 上限降低到 1,000，确认超过上限时不能生成。
 
-## Blockbench manual acceptance checklist — PENDING
-
-1. In Blockbench 5.2.x, create a **Generic Model** project. Note Cube.all.length, Group.all.length, and Texture.all.length.
-2. Load dist/texture_model.js from the local file. Confirm one top-level **纹理模型** menu with **打开纹理模型生成器…** and **关于插件**. Open the resizable Dialog.
-3. Select rgb_transparent_2x2.png. Confirm 2 × 2, four total pixels, three visible pixels, three estimated Cubes, and a thumbnail.
-4. Click **预览**. Confirm the red/green top row, blue bottom-left, and empty bottom-right. Recheck all three Blockbench collection lengths: they must match step 1. Change Voxel Size: Generate must disable until another preview. Close/reopen the Dialog and confirm old tasks do not reappear.
-5. Preview again and generate. Confirm exactly one new root Group with direct children px_0_0, px_1_0, px_0_1; exactly three 1 × 1 × 1 Cubes; and one new image Texture. All six faces of the red Cube must show the red texel, with equivalent checks for green and blue. Inspect each face's enabled state, texture, and UV rectangle.
-6. Undo once: the three Cubes, Group, and Texture must all disappear. Redo once: all must return.
-7. Enable **包含透明像素** and re-preview: estimate and generated count must become four, with the fourth Cube retaining alpha zero in its texture.
-8. Use corners_4x2.png. Confirm width 4, height 2, correct top/bottom orientation, and the same source texel on all six faces of each corner Cube.
-9. Try a format with mandatory Box UV. Generation must be rejected before any model changes.
-10. Reload and unload the plugin. Confirm no duplicate menu, Action, Dialog, listeners, or persistent preview resources.
-
-## Large texture matrix — Blockbench Preview/Generation PENDING
-
-The plan timings below are **Node CLI only**, median of five runs with real event-loop yields on this machine. They are not Blockbench preview or generation times.
-
-| Texture | Expected Cubes | CLI Plan median | Blockbench Preview | Blockbench Generation |
-| --- | ---: | ---: | --- | --- |
-| 16 × 16 | 256 | 1.27 ms | PENDING | PENDING |
-| 32 × 32 | 1,024 | 1.32 ms | PENDING | PENDING |
-| 64 × 64 | 4,096 | 2.83 ms | PENDING | PENDING |
-| 128 × 128 | 16,384 | 9.99 ms | PENDING | PENDING |
-
-The 128 × 128 case is below the default 20,000-Cube limit and should show the yellow performance warning. Record actual Blockbench preview and generation times before declaring host performance PASS.
+用户验收反馈后继续在 `dev` 迭代；下一次测试交付递增为 `0.2.0-dev2`，不自行合并主分支。

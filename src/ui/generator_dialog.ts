@@ -24,26 +24,22 @@ function buildMarkup(): string {
   '<div class="texture-model-shell"><div class="texture-model-columns">',
   '<div class="texture-model-controls">',
   '<section><h3>' + tr('section.texture') + '</h3>',
-  '<label class="texture-model-file">' + tr('field.choose_texture') + ' <input data-field="file" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label>',
-  '<span data-output="filename">' + tr('field.no_image') + '</span>',
-  '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr('field.thumbnail_alt') + '" hidden></section>',
+  '<div class="texture-model-import"><label class="texture-model-file">',
+  '<span class="material-icons" aria-hidden="true">add_photo_alternate</span><span>' + tr('field.choose_texture') + '</span>',
+  '<input data-field="file" type="file" accept="image/png,.png" aria-label="' + tr('field.choose_texture') + '"></label>',
+  '<img data-output="thumbnail" class="texture-model-thumbnail" alt="' + tr('field.thumbnail_alt') + '" hidden></div>',
+  '<span data-output="filename" class="texture-model-filename" hidden></span></section>',
   '<section><h3>' + tr('section.settings') + '</h3>',
-  '<label>' + tr('field.processing_mode') + ' <select data-field="processingMode"><option value="row">' + tr('field.row_mode') + '</option><option value="pixel">' + tr('field.pixel_mode') + '</option></select></label>',
-  '<label>' + tr('field.voxel_size') + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1"></label>',
-  '<label>' + tr('field.alpha_threshold') + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0"></label>',
+  '<label>' + tr('field.processing_mode') + ' <span class="texture-model-select"><select data-field="processingMode"><option value="pixel" selected>' + tr('field.pixel_mode') + '</option><option value="row">' + tr('field.row_mode') + '</option><option value="column">' + tr('field.column_mode') + '</option></select><span class="texture-model-select-arrow" aria-hidden="true">▾</span></span></label>',
+  '<label>' + tr('field.voxel_size') + ' <input data-field="voxelSize" type="number" min="0.01" step="0.1" value="1" required></label>',
+  '<label>' + tr('field.alpha_threshold') + ' <input data-field="alphaThreshold" type="number" min="0" max="255" step="1" value="0" required></label>',
   '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr('field.include_transparent') + '</label>',
   '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr('field.center_model') + '</label>',
   '<label>' + tr('field.group_name') + ' <input data-field="groupName" type="text" value="texture_model"></label>',
   '<details><summary>' + tr('section.advanced') + '</summary>',
-  '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000"></label>',
+  '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
   '<small>' + tr('note.performance') + '</small></details></section>',
-  '<section class="texture-model-stats"><h3>' + tr('section.stats') + '</h3>',
-  '<div>' + tr('stats.image_dimensions') + ' <strong data-output="dimensions">—</strong></div>',
-  '<div>' + tr('stats.total_pixels') + ' <strong data-output="totalPixels">—</strong></div>',
-  '<div>' + tr('stats.visible_pixels') + ' <strong data-output="visiblePixels">—</strong></div>',
-  '<div>' + tr('stats.expected_cubes') + ' <strong data-output="voxelCount">—</strong></div>',
-  '<div>' + tr('stats.model_dimensions') + ' <strong data-output="modelSize">—</strong></div></section>',
-  '<p class="texture-model-status" data-output="status" role="status">' + tr('status.choose_image') + '</p>',
+  '<p class="texture-model-status" data-output="status" role="status" hidden></p>',
   '<div class="texture-model-actions"><button type="button" data-action="preview" disabled>' + tr('action.preview') + '</button>',
   '<button type="button" data-action="generate" disabled>' + tr('action.generate') + '</button></div>',
   '</div><div class="texture-model-preview-wrap">',
@@ -75,6 +71,11 @@ class GeneratorController {
 
   constructor(private readonly dialog: Dialog, private readonly onGenerate?: GenerateHandler) {
     this.root = required<HTMLElement>(dialog.object, '.texture-model-shell');
+    this.field<HTMLInputElement>('file').value = '';
+    this.output('filename').hidden = true;
+    this.output('thumbnail').hidden = true;
+    this.output('thumbnail').removeAttribute('src');
+    this.setStatus('');
     this.bind();
     this.updateState();
   }
@@ -134,9 +135,14 @@ class GeneratorController {
     const thumbnail = this.output<HTMLImageElement>('thumbnail');
     thumbnail.hidden = true;
     thumbnail.removeAttribute('src');
-    this.output('filename').textContent = file?.name ?? tr('field.no_image');
+    const filename = this.output('filename');
+    filename.textContent = file?.name ?? '';
+    filename.hidden = !file;
     this.updateState();
-    if (!file) return;
+    if (!file) {
+      this.setStatus('');
+      return;
+    }
     const token = this.replaceTask();
     const revision = this.revision;
     this.setStatus(tr('status.reading_image'));
@@ -151,19 +157,21 @@ class GeneratorController {
       this.setStatus(tr('status.image_loaded'));
       this.updateState();
     } catch (error) {
-      if (!(error instanceof TaskCancelledError)) this.setStatus(messageOf(error), 'error');
+      if (!token.cancelled && revision === this.revision && !(error instanceof TaskCancelledError)) {
+        this.setStatus(messageOf(error), 'error');
+      }
     }
   }
 
   private options(): GeneratorOptions {
     const options: GeneratorOptions = {
       processingMode: this.field<HTMLSelectElement>('processingMode').value as ProcessingMode,
-      voxelSize: Number(this.field<HTMLInputElement>('voxelSize').value),
-      alphaThreshold: Number(this.field<HTMLInputElement>('alphaThreshold').value),
+      voxelSize: this.field<HTMLInputElement>('voxelSize').valueAsNumber,
+      alphaThreshold: this.field<HTMLInputElement>('alphaThreshold').valueAsNumber,
       includeTransparent: this.field<HTMLInputElement>('includeTransparent').checked,
       centerModel: this.field<HTMLInputElement>('centerModel').checked,
       groupName: this.field<HTMLInputElement>('groupName').value.trim() || 'texture_model',
-      maxVoxels: Number(this.field<HTMLInputElement>('maxVoxels').value)
+      maxVoxels: this.field<HTMLInputElement>('maxVoxels').valueAsNumber
     };
     validatePlannerOptions(options);
     validateMaxVoxels(options.maxVoxels);
@@ -174,15 +182,13 @@ class GeneratorController {
     const status = this.output('status');
     status.textContent = message;
     status.dataset.level = level;
+    status.hidden = !message;
   }
 
   private updateState(): void {
     const previewButton = required<HTMLButtonElement>(this.root, '[data-action="preview"]');
     const generateButton = required<HTMLButtonElement>(this.root, '[data-action="generate"]');
     if (!this.image || !this.alphaHistogram) {
-      for (const name of ['dimensions', 'totalPixels', 'visiblePixels', 'voxelCount', 'modelSize']) {
-        this.output(name).textContent = '—';
-      }
       previewButton.disabled = true;
       generateButton.disabled = true;
       return;
@@ -192,15 +198,6 @@ class GeneratorController {
       const counts = countFromAlphaHistogram(
         this.alphaHistogram, options.alphaThreshold, options.includeTransparent
       );
-      this.output('dimensions').textContent = this.image.width + ' × ' + this.image.height;
-      this.output('totalPixels').textContent = String(counts.totalPixels);
-      this.output('visiblePixels').textContent = String(counts.visiblePixels);
-      this.output('voxelCount').textContent = String(counts.voxelCount);
-      this.output('modelSize').textContent = [
-        this.image.width * options.voxelSize,
-        this.image.height * options.voxelSize,
-        options.voxelSize
-      ].join(' × ');
       const limit = getVoxelLimitStatus(counts.voxelCount, options.maxVoxels);
       previewButton.disabled = limit === 'exceeded';
       generateButton.disabled = limit === 'exceeded' ||
@@ -256,7 +253,7 @@ class GeneratorController {
       this.previewRevision = revision;
       this.updateState();
       if (getVoxelLimitStatus(plan.voxelCount, options.maxVoxels) === 'ok') {
-        this.setStatus(tr('status.preview_ready', [plan.voxelCount]));
+        this.setStatus(tr('status.preview_ready'));
       }
     } catch (error) {
       this.renderer?.dispose();

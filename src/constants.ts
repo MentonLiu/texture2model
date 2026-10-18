@@ -7,7 +7,7 @@ export const PERFORMANCE_WARNING_VOXELS = 8_000;
 export const DEFAULT_PIXEL_BATCH_SIZE = 256;
 
 export const DEFAULT_GENERATOR_OPTIONS: GeneratorOptions = {
-  processingMode: 'row',
+  processingMode: 'pixel',
   voxelSize: 1,
   alphaThreshold: 0,
   includeTransparent: false,
@@ -17,7 +17,5 @@ export const DEFAULT_GENERATOR_OPTIONS: GeneratorOptions = {
 };
 
 export const SUPPORTED_IMAGE_MIME_TYPES = [
-  'image/png',
-  'image/jpeg',
-  'image/webp'
+  'image/png'
 ] as const;

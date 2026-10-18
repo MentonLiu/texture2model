@@ -60,10 +60,12 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   for (const voxel of plan.voxels) {
     const { sourceX, sourceY } = voxel;
     const sourceIndex = sourceY * image.width + sourceX;
+    const traversalIndex = options.processingMode === 'column'
+      ? sourceX * image.height + sourceY : sourceIndex;
     const pixelIndex = sourceIndex * 4;
     if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) ||
         sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height ||
-        sourceIndex <= previousSourceIndex ||
+        traversalIndex <= previousSourceIndex ||
         voxel.rgba.r !== image.data[pixelIndex] ||
         voxel.rgba.g !== image.data[pixelIndex + 1] ||
         voxel.rgba.b !== image.data[pixelIndex + 2] ||
@@ -71,7 +73,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
         (!options.includeTransparent && voxel.rgba.a <= options.alphaThreshold)) {
       throw new ModelValidationError('Preview pixel data is stale or invalid.', 'error.preview_pixels');
     }
-    previousSourceIndex = sourceIndex;
+    previousSourceIndex = traversalIndex;
     minSourceX = Math.min(minSourceX, sourceX);
     maxSourceX = Math.max(maxSourceX, sourceX);
     minSourceY = Math.min(minSourceY, sourceY);
