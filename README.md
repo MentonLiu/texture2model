@@ -8,6 +8,8 @@ Texture Model is a Blockbench plugin that turns an image into a voxel model. It 
 
 Texture → Pixels → ModelPlan → Preview → one Cube Group in the current project.
 
+The dialog uses a compact PNG picker, highlighted editable fields, and a visible dropdown arrow. Statistics and the About menu/dialog have been removed.
+
 The plugin UI follows Blockbench's configured language. It provides English and Simplified or Traditional Chinese; other Blockbench languages fall back to English. Plugin author: `600_liang`. Tags: `Texture`, `Modeling`, `Tool`.
 
 ### Requirements and installation
@@ -17,7 +19,7 @@ The plugin UI follows Blockbench's configured language. It provides English and 
 
 ~~~sh
 npm ci
-npm run check
+npm run build
 ~~~
 
 The installable single-file plugin is [dist/texture_model.js](dist/texture_model.js). In Blockbench, open **File → Plugins → Load Plugin from File** and select it. Build it again after changing source:
@@ -30,15 +32,15 @@ npm run build
 
 1. Open a compatible Blockbench model project.
 2. Choose **Texture Model → Open Texture Model Generator…**.
-3. Select a PNG, JPEG/JPG, or WebP image.
+3. Select a PNG image.
 4. Set the options and click **Preview**. Drag the preview to rotate and use the wheel to zoom.
-5. Confirm the count and click **Generate in Workspace**.
+5. Review the preview and click **Generate in Workspace**.
 
 The generated texture and all Cubes are placed under one new root Group. One Undo removes the entire generation; Redo restores it.
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| Processing | By row | Row and pixel modes produce identical Cubes; only scheduling differs. |
+| Processing | By pixel | Pixel, row, and column modes create the same geometry and UVs; traversal order and scheduling differ. |
 | Voxel Size | 1 | Width, height, and depth of each Cube. |
 | Alpha Threshold | 0 | Generate when source alpha is strictly greater than the threshold. |
 | Include Transparent | Off | When on, every pixel gets a Cube and retains its original texture alpha. |
@@ -57,15 +59,14 @@ The image-to-plan stage yields to the UI in batches and can be cancelled. The fi
 ### Development
 
 ~~~sh
-npm run typecheck
-npm run lint
-npm run test
 npm run build
-npm run check
-npm run fixtures
 ~~~
 
-The source lives in [src](src), automated tests in [tests](tests), and design and verification notes in [docs](docs). Plugin author metadata is `600_liang`; the Blockbench tags are `Texture`, `Modeling`, and `Tool`.
+The current development target is **0.2.0**, with **0.2.0-dev1** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
+
+Use **LSP diagnostics only** for syntax and type feedback. Do not run typecheck commands, Lint, tests, or plugin runtime verification. `npm run build` only packages the installable plugin with esbuild. Existing test sources are historical and must not be run. Runtime acceptance is performed by the user; see [docs/TESTING.md](docs/TESTING.md).
+
+The source lives in [src](src), and design and verification notes in [docs](docs). Plugin author metadata is `600_liang`; the Blockbench tags are `Texture`, `Modeling`, and `Tool`.
 
 ### License
 
@@ -77,6 +78,8 @@ This project is licensed under the [MIT License](LICENSE).
 
 纹理 → 像素 → ModelPlan → 预览 → 在当前项目中创建一个 Cube 组。
 
+界面使用简洁的 PNG 导入按钮，突出可编辑输入框，并为下拉框显示明确箭头。已移除统计信息和“关于纹理模型”菜单与弹窗。
+
 插件界面会跟随 Blockbench 当前配置的语言。支持英文、简体中文和繁体中文；其他 Blockbench 语言会显示英文。插件开发者：`600_liang`。标签：`Texture`、`Modeling`、`Tool`。
 
 ### 环境要求与安装
@@ -86,7 +89,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ~~~sh
 npm ci
-npm run check
+npm run build
 ~~~
 
 可直接安装的单文件插件为 [dist/texture_model.js](dist/texture_model.js)。在 Blockbench 中打开 **文件 → 插件 → 从文件加载插件**，选择该文件。修改源代码后重新构建：
@@ -99,15 +102,15 @@ npm run build
 
 1. 打开兼容的 Blockbench 模型项目。
 2. 选择 **纹理模型 → 打开纹理模型生成器…**。
-3. 选择 PNG、JPEG/JPG 或 WebP 图片。
+3. 选择 PNG 图片。
 4. 设置参数并点击 **预览**。拖动预览可旋转，滚动滚轮可缩放。
-5. 确认 Cube 数量后，点击 **生成到工作区**。
+5. 确认预览后，点击 **生成到工作区**。
 
 生成的纹理和所有 Cube 都会放入一个新建的根 Group。执行一次撤销即可移除本次生成的全部内容；重做可恢复。
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| 处理方式 | 按行 | 按行和按像素会生成相同的 Cube，只影响任务调度。 |
+| 处理方式 | 按像素 | 支持按像素、按行和按列；生成的几何形状和 UV 相同，遍历顺序与任务调度不同。 |
 | 体素尺寸 | 1 | 每个 Cube 的宽、高和厚度。 |
 | 透明度阈值 | 0 | 仅当原像素 alpha 严格大于阈值时生成。 |
 | 包含透明像素 | 关闭 | 开启后每个像素都会生成 Cube，并保留原纹理透明度。 |
@@ -126,15 +129,14 @@ Cube 数量随符合条件的像素数增加：全不透明的 128 × 128 图片
 ### 开发
 
 ~~~sh
-npm run typecheck
-npm run lint
-npm run test
 npm run build
-npm run check
-npm run fixtures
 ~~~
 
-源代码位于 [src](src)，自动化测试位于 [tests](tests)，架构与验证说明位于 [docs](docs)。插件开发者为 `600_liang`，Blockbench 标签为 `Texture`、`Modeling` 和 `Tool`。
+当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev1** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
+
+**只允许 LSP 语法和类型诊断**，禁止运行类型检查命令、Lint、任何代码测试或插件运行验证。`npm run build` 仅通过 esbuild 打包安装文件。已有测试源码仅保留历史记录，不得运行。实际功能由用户亲自验收，见 [docs/TESTING.md](docs/TESTING.md)。
+
+源代码位于 [src](src)，架构与验证说明位于 [docs](docs)。插件开发者为 `600_liang`，Blockbench 标签为 `Texture`、`Modeling` 和 `Tool`。
 
 ### 许可证
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-dev1 — Development build / 开发测试版本
+
+- Restrict import to PNG, including extension, MIME, and file signature validation.
+- Add column traversal, make pixel processing the default, and validate column ordering when generating.
+- Simplify the texture picker, remove statistics and the About action/dialog, and highlight editable fields with a visible dropdown arrow.
+- Keep development on `dev`; merging to `main` requires explicit user authorization.
+- Allow only LSP syntax/type diagnostics and esbuild packaging. No typecheck commands, Lint, automated tests, or plugin runtime tests are permitted; user acceptance is pending.
+
+- 当前只允许导入 PNG，同时校验扩展名、MIME 与文件头。
+- 新增按列处理，默认改为按像素；生成校验同步支持列遍历顺序。
+- 简化纹理导入区，移除统计信息及“关于纹理模型”按钮与弹窗，突出输入框并显示下拉箭头。
+- 功能合并回 `dev`，未经用户明确要求不得合并 `main`。
+- 验证仅限 LSP 语法/类型诊断及 esbuild 打包；禁止类型检查命令、Lint、自动化测试与插件运行测试，等待用户亲自验收。
+
 ## 0.1.0 — Initial Release / 首个正式版本
 
 ### English
