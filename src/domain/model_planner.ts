@@ -15,10 +15,9 @@ import {
   validatePlannerOptions
 } from './validation';
 
-// A one-pixel-wide image can have thousands of rows. Keep each row atomic,
-// while avoiding a separate browser timer for every tiny row.
-const ROW_BATCH_MAX_ROWS = 256;
-const ROW_BATCH_MAX_PIXELS = 2_048;
+// Batch short rows/columns to avoid a browser timer for each tiny line.
+const LINE_BATCH_MAX_LINES = 256;
+const LINE_BATCH_MAX_PIXELS = 2_048;
 
 export interface PlanTaskOptions {
   token?: CancellationToken;
@@ -56,8 +55,8 @@ export function countImagePixels(
 }
 
 /**
- * Produces independent voxels in row-major source-image order. Both processing
- * modes run the same pixel mapping; only their UI yield points differ.
+ * Pixel and row modes traverse rows; column mode traverses columns. All modes
+ * use the same source coordinates, geometry, and UV mapping.
  */
 export async function planModel(
   image: PixelImage,
@@ -82,12 +81,17 @@ export async function planModel(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  let rowsSinceYield = 0;
-  let pixelsAtLastRowYield = 0;
+  let linesSinceYield = 0;
+  let pixelsAtLastLineYield = 0;
+  const byColumn = options.processingMode === 'column';
+  const lineCount = byColumn ? image.width : image.height;
+  const lineLength = byColumn ? image.height : image.width;
 
-  for (let sourceY = 0; sourceY < image.height; sourceY += 1) {
+  for (let line = 0; line < lineCount; line += 1) {
     task.token?.throwIfCancelled();
-    for (let sourceX = 0; sourceX < image.width; sourceX += 1) {
+    for (let pixel = 0; pixel < lineLength; pixel += 1) {
+      const sourceX = byColumn ? line : pixel;
+      const sourceY = byColumn ? pixel : line;
       const offset = (sourceY * image.width + sourceX) * 4;
       const alpha = image.data[offset + 3] ?? 0;
       if (options.includeTransparent || alpha > options.alphaThreshold) {
@@ -118,16 +122,16 @@ export async function planModel(
         task.token?.throwIfCancelled();
       }
     }
-    if (options.processingMode === 'row') {
-      rowsSinceYield += 1;
-      if (rowsSinceYield >= ROW_BATCH_MAX_ROWS ||
-          processedPixels - pixelsAtLastRowYield >= ROW_BATCH_MAX_PIXELS ||
-          sourceY === image.height - 1) {
+    if (options.processingMode !== 'pixel') {
+      linesSinceYield += 1;
+      if (linesSinceYield >= LINE_BATCH_MAX_LINES ||
+          processedPixels - pixelsAtLastLineYield >= LINE_BATCH_MAX_PIXELS ||
+          line === lineCount - 1) {
         task.onProgress?.(processedPixels, totalPixels);
         await yieldToUI();
         task.token?.throwIfCancelled();
-        rowsSinceYield = 0;
-        pixelsAtLastRowYield = processedPixels;
+        linesSinceYield = 0;
+        pixelsAtLastLineYield = processedPixels;
       }
     }
   }

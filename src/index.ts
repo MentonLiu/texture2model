@@ -5,7 +5,6 @@ import { pluginStyles } from './ui/styles';
 
 let generatorDialog: GeneratorDialogHandle | undefined;
 let generatorAction: Action | undefined;
-let aboutAction: Action | undefined;
 let textureMenu: BarMenu | undefined;
 let style: Deletable | undefined;
 
@@ -17,7 +16,7 @@ BBPlugin.register('texture_model', {
   tags: ['Texture', 'Modeling', 'Tool'],
   description: tr('plugin.description'),
   icon: 'view_in_ar',
-  version: '0.1.0',
+  version: '0.2.0-dev1',
   variant: 'both',
   min_version: '5.1.0',
   onload() {
@@ -33,18 +32,7 @@ BBPlugin.register('texture_model', {
         generatorDialog.dialog.show();
       }
     });
-    aboutAction = new Action('texture_model_about', {
-      name: tr('menu.about'),
-      icon: 'info',
-      click() {
-        Blockbench.showMessageBox({
-          title: tr('about.title'),
-          message: tr('about.message'),
-          buttons: [tr('dialog.ok')]
-        });
-      }
-    });
-    textureMenu = new BarMenu('texture_model_menu', [generatorAction, aboutAction], {
+    textureMenu = new BarMenu('texture_model_menu', [generatorAction], {
       name: tr('menu.title'),
       icon: 'view_in_ar'
     });
@@ -57,8 +45,6 @@ BBPlugin.register('texture_model', {
     textureMenu = undefined;
     generatorAction?.delete();
     generatorAction = undefined;
-    aboutAction?.delete();
-    aboutAction = undefined;
     style?.delete();
     style = undefined;
   }

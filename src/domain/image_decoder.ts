@@ -8,12 +8,9 @@ function supportedMimeType(file: File): string {
   const declared = file.type.toLowerCase();
   const parts = file.name.split('.');
   const extension = parts[parts.length - 1]?.toLowerCase();
-  const inferred = extension === 'png' ? 'image/png'
-    : extension === 'jpg' || extension === 'jpeg' ? 'image/jpeg'
-      : extension === 'webp' ? 'image/webp' : '';
-  const mimeType = declared || inferred;
-  if (!SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
-    throw new ModelValidationError('Choose a PNG, JPEG, or WebP image.', 'error.image_type');
+  const mimeType = declared || (extension === 'png' ? 'image/png' : '');
+  if (extension !== 'png' || !SUPPORTED_IMAGE_MIME_TYPES.some((supported) => supported === mimeType)) {
+    throw new ModelValidationError('Choose a PNG image.', 'error.image_type');
   }
   return mimeType;
 }
@@ -69,7 +66,7 @@ function loadImage(dataURL: string, token?: CancellationToken): Promise<HTMLImag
       else resolve(image);
     };
     image.onload = () => finish();
-      image.onerror = () => finish(new ModelValidationError('Could not decode the image.', 'error.image_decode'));
+    image.onerror = () => finish(new ModelValidationError('Could not decode the image.', 'error.image_decode'));
     unsubscribe = token?.onCancel(() => {
       image.src = '';
       finish(new TaskCancelledError());
@@ -85,6 +82,14 @@ export async function decodeImageFile(
   token?: CancellationToken
 ): Promise<DecodedImage> {
   const mimeType = supportedMimeType(file);
+  token?.throwIfCancelled();
+  const signature = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  token?.throwIfCancelled();
+  const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (signature.length !== pngSignature.length ||
+      !pngSignature.every((byte, index) => signature[index] === byte)) {
+    throw new ModelValidationError('Choose a PNG image.', 'error.image_type');
+  }
   const dataURL = await readAsDataURL(file, token);
   const image = await loadImage(dataURL, token);
   token?.throwIfCancelled();

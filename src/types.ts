@@ -1,4 +1,4 @@
-export type ProcessingMode = 'row' | 'pixel';
+export type ProcessingMode = 'pixel' | 'row' | 'column';
 
 export interface RgbaPixel {
   r: number;

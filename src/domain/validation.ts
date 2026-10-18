@@ -32,8 +32,9 @@ export function validatePixelImage(image: PixelImage): void {
 }
 
 export function validatePlannerOptions(options: ModelPlannerOptions): void {
-  if (options.processingMode !== 'row' && options.processingMode !== 'pixel') {
-    throw new ModelValidationError('Processing mode must be row or pixel.', 'error.processing_mode');
+  if (options.processingMode !== 'row' && options.processingMode !== 'pixel' &&
+      options.processingMode !== 'column') {
+    throw new ModelValidationError('Processing mode must be pixel, row, or column.', 'error.processing_mode');
   }
   if (!Number.isFinite(options.voxelSize) || options.voxelSize <= 0) {
     throw new ModelValidationError('Voxel size must be greater than zero.', 'error.voxel_size');
