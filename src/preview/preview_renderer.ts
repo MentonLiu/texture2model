@@ -81,6 +81,13 @@ export class PreviewRenderer {
     this.drawFrame();
   }
 
+  clear(): void {
+    if (this.disposed) return;
+    this.plan = null;
+    this.releaseModel();
+    this.drawFrame();
+  }
+
   resize(): void {
     if (this.disposed) return;
     const width = Math.max(1, Math.round(this.canvas.clientWidth || (this.width > 1 ? this.width : this.canvas.width || 640)));
