@@ -1,13 +1,13 @@
 import { DEFAULT_PIXEL_BATCH_SIZE } from '../constants';
 import type {
   ImagePixelCounts,
-  ModelBounds,
   ModelPlan,
   ModelPlannerOptions,
   PixelImage,
   VoxelPlan
 } from '../types';
 import { CancellationToken } from './cancellation';
+import { outerRingSteps, pixelGroup, resolveGrouping, scalePixelGroups } from './pixel_groups';
 import {
   ModelValidationError,
   validateAlphaThreshold,
@@ -76,6 +76,19 @@ export async function planModel(
   const totalPixels = image.width * image.height;
   const voxels: VoxelPlan[] = [];
   const yieldToUI = task.yieldToUI ?? nextUIFrame;
+  const grouping = resolveGrouping(options);
+  let outerMask: Uint8Array | undefined;
+  if (grouping.enabled) {
+    const steps = outerRingSteps(image, options);
+    let step = steps.next();
+    while (!step.done) {
+      task.token?.throwIfCancelled();
+      await yieldToUI();
+      task.token?.throwIfCancelled();
+      step = steps.next();
+    }
+    outerMask = step.value;
+  }
   let processedPixels = 0;
   let minX = Infinity;
   let minY = Infinity;
@@ -108,6 +121,7 @@ export async function planModel(
           z,
           sourceX,
           sourceY,
+          ...(outerMask ? { group: pixelGroup(outerMask, sourceY * image.width + sourceX) } : {}),
           rgba: {
             r: image.data[offset] ?? 0,
             g: image.data[offset + 1] ?? 0,
@@ -148,14 +162,6 @@ export async function planModel(
   }
   task.token?.throwIfCancelled();
 
-  const bounds: ModelBounds = voxels.length === 0
-    ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] }
-    : {
-      min: [minX, minY, minZ],
-      max: [maxX, maxY, maxZ],
-      size: [maxX - minX, maxY - minY, maxZ - minZ]
-    };
-
   if (options.centerModel && voxels.length > 0) {
     const offsetX = -(minX + maxX) / 2;
     const offsetY = -(minY + maxY) / 2;
@@ -165,8 +171,6 @@ export async function planModel(
       voxel.y += offsetY;
       voxel.z += offsetZ;
     }
-    bounds.min = [minX + offsetX, minY + offsetY, minZ + offsetZ];
-    bounds.max = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
   }
 
   return {
@@ -174,8 +178,9 @@ export async function planModel(
     height: image.height,
     voxelSize: options.voxelSize,
     orientation,
+    grouping,
     voxelCount: voxels.length,
-    bounds,
+    bounds: scalePixelGroups(voxels, options.voxelSize, grouping),
     voxels
   };
 }

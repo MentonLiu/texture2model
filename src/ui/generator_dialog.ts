@@ -6,7 +6,7 @@ import { defaultGroupName } from '../domain/naming';
 import { getVoxelLimitStatus, validateMaxVoxels, validatePlannerOptions } from '../domain/validation';
 import { errorMessage, tr } from '../i18n';
 import { PreviewRenderer } from '../preview/preview_renderer';
-import type { DecodedImage, GeneratorOptions, ModelOrientation, ModelPlan, ProcessingMode } from '../types';
+import type { DecodedImage, GeneratorOptions, ModelOrientation, ModelPlan, ProcessingMode, Vector3 } from '../types';
 
 export interface GeneratorDialogHandle {
   dialog: Dialog;
@@ -18,6 +18,14 @@ export type GenerateHandler = (
   plan: ModelPlan,
   options: GeneratorOptions
 ) => void;
+
+function groupScaleMarkup(group: 'outer' | 'inner'): string {
+  return '<fieldset class="texture-model-scale-group"><legend>' + tr('group.' + group) + '</legend>' +
+    '<div class="texture-model-axis-fields">' + ['X', 'Y', 'Z'].map((axis) =>
+      '<label><span>' + axis + '</span><input data-field="' + group + 'Scale' + axis +
+      '" type="number" min="0.01" step="0.1" value="1" required></label>'
+    ).join('') + '</div></fieldset>';
+}
 
 function buildMarkup(): string {
   return [
@@ -37,6 +45,11 @@ function buildMarkup(): string {
   '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr('field.include_transparent') + '</label>',
   '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr('field.center_model') + '</label>',
   '<label>' + tr('field.group_name') + ' <input data-field="groupName" type="text" value="texture_model"></label>',
+  '<label class="texture-model-checkbox"><input data-field="splitOuterRing" type="checkbox"> ' + tr('field.split_outer_ring') + '</label>',
+  '<fieldset data-output="groupSettings" class="texture-model-group-settings" hidden disabled>',
+  '<legend>' + tr('field.group_scale') + '</legend>',
+  groupScaleMarkup('outer'), groupScaleMarkup('inner'),
+  '<small>' + tr('note.group_scale') + '</small></fieldset>',
   '<details><summary>' + tr('section.advanced') + '</summary>',
   '<label>' + tr('field.max_cubes') + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
   '<small>' + tr('note.performance') + '</small></details></section>',
@@ -80,6 +93,7 @@ class GeneratorController {
     this.output('thumbnail').removeAttribute('src');
     this.clearPreview();
     this.setStatus('');
+    this.updateGroupFields();
     this.bind();
     this.updateState();
   }
@@ -101,15 +115,26 @@ class GeneratorController {
     this.listen(this.field<HTMLInputElement>('file'), 'change', () => { void this.selectImage(); });
     for (const name of [
       'processingMode', 'orientation', 'voxelSize', 'alphaThreshold', 'includeTransparent',
-      'centerModel', 'groupName', 'maxVoxels'
+      'centerModel', 'groupName', 'maxVoxels', 'splitOuterRing',
+      'outerScaleX', 'outerScaleY', 'outerScaleZ', 'innerScaleX', 'innerScaleY', 'innerScaleZ'
     ]) {
       const field = this.field<HTMLInputElement | HTMLSelectElement>(name);
       const event = field.tagName === 'SELECT' || field.type === 'checkbox' ? 'change' : 'input';
-      this.listen(field, event, () => this.schedulePreview());
+      this.listen(field, event, () => {
+        this.updateGroupFields();
+        this.schedulePreview();
+      });
     }
     this.listen(required(this.root, '[data-action="generate"]'), 'click', () => {
       this.generate();
     });
+  }
+
+  private updateGroupFields(): void {
+    const enabled = this.field<HTMLInputElement>('splitOuterRing').checked;
+    const settings = this.output<HTMLFieldSetElement>('groupSettings');
+    settings.hidden = !enabled;
+    settings.disabled = !enabled;
   }
 
   private invalidatePreview(): void {
@@ -200,9 +225,17 @@ class GeneratorController {
   }
 
   private options(): GeneratorOptions {
+    const splitOuterRing = this.field<HTMLInputElement>('splitOuterRing').checked;
+    const scale = (group: 'outer' | 'inner'): Vector3 => splitOuterRing
+      ? [
+        this.field<HTMLInputElement>(group + 'ScaleX').valueAsNumber,
+        this.field<HTMLInputElement>(group + 'ScaleY').valueAsNumber,
+        this.field<HTMLInputElement>(group + 'ScaleZ').valueAsNumber
+      ] : [1, 1, 1];
     const options: GeneratorOptions = {
       processingMode: this.field<HTMLSelectElement>('processingMode').value as ProcessingMode,
       orientation: this.field<HTMLSelectElement>('orientation').value as ModelOrientation,
+      grouping: { enabled: splitOuterRing, outerScale: scale('outer'), innerScale: scale('inner') },
       voxelSize: this.field<HTMLInputElement>('voxelSize').valueAsNumber,
       alphaThreshold: this.field<HTMLInputElement>('alphaThreshold').valueAsNumber,
       includeTransparent: this.field<HTMLInputElement>('includeTransparent').checked,

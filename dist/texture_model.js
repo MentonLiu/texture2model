@@ -43,6 +43,15 @@
     if (options.orientation !== void 0 && options.orientation !== "upright" && options.orientation !== "flat") {
       throw new ModelValidationError("Model orientation must be upright or flat.", "error.orientation");
     }
+    const grouping = options.grouping;
+    if (grouping !== void 0) {
+      if (typeof grouping.enabled !== "boolean") {
+        throw new ModelValidationError("Pixel grouping must be enabled or disabled.", "error.grouping");
+      }
+      if (grouping.enabled && [grouping.outerScale, grouping.innerScale].some((scale) => !Array.isArray(scale) || scale.length !== 3 || !scale.every((value) => Number.isFinite(value) && value > 0))) {
+        throw new ModelValidationError("Each group needs positive finite X, Y, and Z scales.", "error.group_scale");
+      }
+    }
     validateAlphaThreshold(options.alphaThreshold);
     if (typeof options.includeTransparent !== "boolean" || typeof options.centerModel !== "boolean") {
       throw new ModelValidationError(
@@ -76,6 +85,109 @@
     if (voxelCount > maxVoxels) return "exceeded";
     if (voxelCount > PERFORMANCE_WARNING_VOXELS) return "warning";
     return "ok";
+  }
+
+  // src/domain/pixel_groups.ts
+  var BATCH_SIZE = 2048;
+  var ELIGIBLE = 1;
+  var EXTERIOR = 2;
+  var OUTER_RING = 3;
+  function resolveGrouping(options) {
+    if (!options.grouping?.enabled) {
+      return { enabled: false, outerScale: [1, 1, 1], innerScale: [1, 1, 1] };
+    }
+    return {
+      enabled: true,
+      outerScale: [...options.grouping.outerScale],
+      innerScale: [...options.grouping.innerScale]
+    };
+  }
+  function* outerRingSteps(image, options) {
+    const count = image.width * image.height;
+    const mask = new Uint8Array(count);
+    const queue = new Uint32Array(count);
+    let tail = 0;
+    for (let index = 0; index < count; index += 1) {
+      const x = index % image.width;
+      const y = Math.floor(index / image.width);
+      const eligible = (image.data[index * 4 + 3] ?? 0) > options.alphaThreshold;
+      const edge = x === 0 || y === 0 || x === image.width - 1 || y === image.height - 1;
+      if (eligible) mask[index] = edge ? OUTER_RING : ELIGIBLE;
+      else if (edge) {
+        mask[index] = EXTERIOR;
+        queue[tail++] = index;
+      }
+      if ((index + 1) % BATCH_SIZE === 0) yield;
+    }
+    const visit = (index) => {
+      if (mask[index] === 0) {
+        mask[index] = EXTERIOR;
+        queue[tail++] = index;
+      } else if (mask[index] === ELIGIBLE) mask[index] = OUTER_RING;
+    };
+    for (let head = 0; head < tail; head += 1) {
+      const index = queue[head] ?? 0;
+      const x = index % image.width;
+      if (x > 0) visit(index - 1);
+      if (x < image.width - 1) visit(index + 1);
+      if (index >= image.width) visit(index - image.width);
+      if (index < count - image.width) visit(index + image.width);
+      if ((head + 1) % BATCH_SIZE === 0) yield;
+    }
+    return mask;
+  }
+  function outerRingMask(image, options) {
+    const steps = outerRingSteps(image, options);
+    let step = steps.next();
+    while (!step.done) step = steps.next();
+    return step.value;
+  }
+  function pixelGroup(mask, index) {
+    return mask[index] === OUTER_RING ? "outer" : "inner";
+  }
+  function groupScale(grouping, group) {
+    return group === "outer" ? grouping.outerScale : grouping.innerScale;
+  }
+  function voxelDimensions(voxel, size) {
+    return voxel.size ?? [size, size, size];
+  }
+  function voxelBounds(voxels, size) {
+    if (voxels.length === 0) return { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] };
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const voxel of voxels) {
+      const dimensions = voxelDimensions(voxel, size);
+      const position = [voxel.x, voxel.y, voxel.z];
+      for (const axis of [0, 1, 2]) {
+        min[axis] = Math.min(min[axis], position[axis] ?? 0);
+        max[axis] = Math.max(max[axis], (position[axis] ?? 0) + dimensions[axis]);
+      }
+    }
+    return { min, max, size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]] };
+  }
+  function scalePixelGroups(voxels, size, grouping) {
+    if (grouping.enabled) {
+      for (const group of ["outer", "inner"]) {
+        const members = voxels.filter((voxel) => voxel.group === group);
+        const bounds2 = voxelBounds(members, size);
+        const scale = groupScale(grouping, group);
+        const center = bounds2.min.map((value, axis) => (value + (bounds2.max[axis] ?? 0)) / 2);
+        for (const voxel of members) {
+          voxel.x = (center[0] ?? 0) + (voxel.x - (center[0] ?? 0)) * scale[0];
+          voxel.y = (center[1] ?? 0) + (voxel.y - (center[1] ?? 0)) * scale[1];
+          voxel.z = (center[2] ?? 0) + (voxel.z - (center[2] ?? 0)) * scale[2];
+          voxel.size = [size * scale[0], size * scale[1], size * scale[2]];
+          if (![voxel.x, voxel.y, voxel.z, ...voxel.size].every(Number.isFinite) || !voxel.size.every((value) => value > 0)) {
+            throw new ModelValidationError("Group scales produce invalid geometry.", "error.group_scale");
+          }
+        }
+      }
+    }
+    const bounds = voxelBounds(voxels, size);
+    if (![...bounds.min, ...bounds.max, ...bounds.size].every(Number.isFinite)) {
+      throw new ModelValidationError("Group scales produce invalid bounds.", "error.group_scale");
+    }
+    return bounds;
   }
 
   // src/domain/model_planner.ts
@@ -116,6 +228,19 @@
     const totalPixels = image.width * image.height;
     const voxels = [];
     const yieldToUI = task.yieldToUI ?? nextUIFrame;
+    const grouping = resolveGrouping(options);
+    let outerMask;
+    if (grouping.enabled) {
+      const steps = outerRingSteps(image, options);
+      let step = steps.next();
+      while (!step.done) {
+        task.token?.throwIfCancelled();
+        await yieldToUI();
+        task.token?.throwIfCancelled();
+        step = steps.next();
+      }
+      outerMask = step.value;
+    }
     let processedPixels = 0;
     let minX = Infinity;
     let minY = Infinity;
@@ -147,6 +272,7 @@
             z,
             sourceX,
             sourceY,
+            ...outerMask ? { group: pixelGroup(outerMask, sourceY * image.width + sourceX) } : {},
             rgba: {
               r: image.data[offset] ?? 0,
               g: image.data[offset + 1] ?? 0,
@@ -183,11 +309,6 @@
       task.onProgress?.(processedPixels, totalPixels);
     }
     task.token?.throwIfCancelled();
-    const bounds = voxels.length === 0 ? { min: [0, 0, 0], max: [0, 0, 0], size: [0, 0, 0] } : {
-      min: [minX, minY, minZ],
-      max: [maxX, maxY, maxZ],
-      size: [maxX - minX, maxY - minY, maxZ - minZ]
-    };
     if (options.centerModel && voxels.length > 0) {
       const offsetX = -(minX + maxX) / 2;
       const offsetY = -(minY + maxY) / 2;
@@ -197,16 +318,15 @@
         voxel.y += offsetY;
         voxel.z += offsetZ;
       }
-      bounds.min = [minX + offsetX, minY + offsetY, minZ + offsetZ];
-      bounds.max = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
     }
     return {
       width: image.width,
       height: image.height,
       voxelSize: options.voxelSize,
       orientation,
+      grouping,
       voxelCount: voxels.length,
-      bounds,
+      bounds: scalePixelGroups(voxels, options.voxelSize, grouping),
       voxels
     };
   }
@@ -260,203 +380,6 @@
     ];
   }
 
-  // src/blockbench/texture_writer.ts
-  function writeTexture(image, track) {
-    const name = uniqueTextureName(image.fileName, Texture.all.map((texture2) => texture2.name));
-    const texture = new Texture({ name });
-    track(texture);
-    texture.uv_width = image.width;
-    texture.uv_height = image.height;
-    texture.fromDataURL(image.dataURL);
-    return texture.add(false);
-  }
-
-  // src/blockbench/model_writer.ts
-  var FACE_DIRECTIONS = [
-    "north",
-    "south",
-    "east",
-    "west",
-    "up",
-    "down"
-  ];
-  function sameNumber(actual, expected) {
-    return Number.isFinite(actual) && Math.abs(actual - expected) <= 1e-8 * Math.max(1, Math.abs(expected));
-  }
-  function validatePlan(image, plan, options) {
-    validatePixelImage(image);
-    validatePlannerOptions(options);
-    validateMaxVoxels(options.maxVoxels);
-    if (typeof image.dataURL !== "string" || !image.dataURL.startsWith("data:image/")) {
-      throw new ModelValidationError(
-        "The decoded image has no usable Data URL.",
-        "error.decoded_data_url"
-      );
-    }
-    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || (plan.orientation ?? "upright") !== (options.orientation ?? "upright") || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
-      throw new ModelValidationError(
-        "Preview no longer matches the chosen image or settings.",
-        "error.preview_stale"
-      );
-    }
-    const expectedCount = countImagePixels(
-      image,
-      options.alphaThreshold,
-      options.includeTransparent
-    ).voxelCount;
-    if (plan.voxelCount !== expectedCount) {
-      throw new ModelValidationError(
-        "Preview no longer matches the transparency settings.",
-        "error.preview_transparency_stale"
-      );
-    }
-    if (plan.voxelCount > options.maxVoxels) {
-      throw new ModelValidationError(
-        `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`,
-        "error.cube_limit",
-        [plan.voxelCount, options.maxVoxels]
-      );
-    }
-    const size = options.voxelSize;
-    let minSourceX = Infinity;
-    let minSourceY = Infinity;
-    let maxSourceX = -Infinity;
-    let maxSourceY = -Infinity;
-    let previousSourceIndex = -1;
-    for (const voxel of plan.voxels) {
-      const { sourceX, sourceY } = voxel;
-      const sourceIndex = sourceY * image.width + sourceX;
-      const traversalIndex = options.processingMode === "column" ? sourceX * image.height + sourceY : sourceIndex;
-      const pixelIndex = sourceIndex * 4;
-      if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || traversalIndex <= previousSourceIndex || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
-        throw new ModelValidationError("Preview pixel data is stale or invalid.", "error.preview_pixels");
-      }
-      previousSourceIndex = traversalIndex;
-      minSourceX = Math.min(minSourceX, sourceX);
-      maxSourceX = Math.max(maxSourceX, sourceX);
-      minSourceY = Math.min(minSourceY, sourceY);
-      maxSourceY = Math.max(maxSourceY, sourceY);
-    }
-    if (plan.voxelCount === 0) {
-      if ([...plan.bounds.min, ...plan.bounds.max, ...plan.bounds.size].some((dimension) => !sameNumber(dimension, 0))) {
-        throw new ModelValidationError(
-          "Empty preview bounds are invalid.",
-          "error.preview_empty_bounds"
-        );
-      }
-      return;
-    }
-    const minX = minSourceX * size;
-    const maxX = (maxSourceX + 1) * size;
-    const flat = options.orientation === "flat";
-    const minY = flat ? 0 : (image.height - 1 - maxSourceY) * size;
-    const maxY = flat ? size : (image.height - minSourceY) * size;
-    const minZ = flat ? minSourceY * size : 0;
-    const maxZ = flat ? (maxSourceY + 1) * size : size;
-    const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
-    const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
-    const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
-    for (const voxel of plan.voxels) {
-      if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) || !sameNumber(voxel.y, (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY) || !sameNumber(voxel.z, (flat ? voxel.sourceY * size : 0) + offsetZ)) {
-        throw new ModelValidationError("Preview geometry is stale or invalid.", "error.preview_geometry");
-      }
-    }
-    const expectedMin = [minX + offsetX, minY + offsetY, minZ + offsetZ];
-    const expectedMax = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
-    for (let axis = 0; axis < 3; axis += 1) {
-      if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) || !sameNumber(
-        plan.bounds.size[axis] ?? NaN,
-        (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN)
-      )) {
-        throw new ModelValidationError("Preview bounds are stale or invalid.", "error.preview_bounds");
-      }
-    }
-  }
-  function preflightFormat(image) {
-    if (typeof Project === "undefined" || !Project || typeof Format === "undefined" || !Format) {
-      throw new ModelValidationError("Open a Blockbench model project before generating.", "error.open_project");
-    }
-    if (typeof Cube === "undefined" || typeof Group === "undefined" || typeof Texture === "undefined" || typeof Undo === "undefined" || typeof Canvas === "undefined" || !Format.edit_mode || Format.image_editor) {
-      throw new ModelValidationError(
-        "The current project format does not support Cube editing.",
-        "error.cube_unsupported"
-      );
-    }
-    if (Format.box_uv && !Format.optional_box_uv || Format.single_texture || Format.per_group_texture) {
-      throw new ModelValidationError(
-        "The current project format cannot use an independent texture on every Cube face.",
-        "error.per_face_uv_unsupported"
-      );
-    }
-    if (!Format.per_texture_uv_size && (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 || !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
-      throw new ModelValidationError("The current project UV dimensions are invalid.", "error.project_uv_size");
-    }
-    const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
-    const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
-    if (!Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0) {
-      throw new ModelValidationError("The current project has invalid UV dimensions.", "error.uv_size");
-    }
-  }
-  function cubeFaces(uv, texture) {
-    const faces = {};
-    for (const direction of FACE_DIRECTIONS) {
-      faces[direction] = { enabled: true, texture: texture.uuid, uv: [...uv] };
-    }
-    return faces;
-  }
-  function makeCube(voxel, size, texture, image, uvWidth, uvHeight) {
-    const uv = pixelToUVRect(
-      voxel.sourceX,
-      voxel.sourceY,
-      image.width,
-      image.height,
-      uvWidth,
-      uvHeight
-    );
-    return new Cube({
-      name: `px_${voxel.sourceX}_${voxel.sourceY}`,
-      from: [voxel.x, voxel.y, voxel.z],
-      to: [voxel.x + size, voxel.y + size, voxel.z + size],
-      box_uv: false,
-      autouv: 0,
-      faces: cubeFaces(uv, texture)
-    });
-  }
-  function writeModel(image, plan, options) {
-    validatePlan(image, plan, options);
-    preflightFormat(image);
-    if (typeof options.groupName !== "string") {
-      throw new ModelValidationError("Group name must be text.", "error.group_name");
-    }
-    const preferredName = options.groupName.trim() || defaultGroupName(image.fileName);
-    const groupName = uniqueGroupName(preferredName, Group.all.map((group) => group.name));
-    const aspects = {
-      outliner: true,
-      elements: [],
-      groups: [],
-      textures: [],
-      selected_texture: true
-    };
-    Undo.initEdit(aspects);
-    try {
-      const texture = writeTexture(image, (created) => aspects.textures?.push(created));
-      const uvWidth = texture.getUVWidth();
-      const uvHeight = texture.getUVHeight();
-      const group = new Group({ name: groupName });
-      aspects.groups?.push(group);
-      group.addTo("root").init();
-      for (const voxel of plan.voxels) {
-        const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
-        aspects.elements?.push(cube);
-        cube.addTo(group).init();
-      }
-      Undo.finishEdit("Generate Texture Model", aspects);
-    } catch (error) {
-      Undo.cancelEdit(true);
-      throw error;
-    }
-  }
-
   // src/i18n.ts
   var ENGLISH = {
     "texture_model.plugin.title": "Texture Model",
@@ -481,6 +404,11 @@
     "texture_model.field.include_transparent": "Include transparent pixels",
     "texture_model.field.center_model": "Center model",
     "texture_model.field.group_name": "Group Name",
+    "texture_model.field.split_outer_ring": "Separate outer-ring pixels",
+    "texture_model.field.group_scale": "Group scale",
+    "texture_model.group.outer": "Outer pixels",
+    "texture_model.group.inner": "Inner pixels",
+    "texture_model.note.group_scale": "Scale around each group\u2019s center. 1 = original; X, Y, Z are world axes.",
     "texture_model.section.advanced": "Advanced Settings",
     "texture_model.field.max_cubes": "Maximum Cube count",
     "texture_model.note.performance": "A large number of Cubes can significantly affect Blockbench performance.",
@@ -499,6 +427,8 @@
     "texture_model.error.image_dimensions": "Image width and height must be positive integers.",
     "texture_model.error.image_rgba": "Image RGBA data length does not match its dimensions.",
     "texture_model.error.orientation": "Model orientation must be upright or flat.",
+    "texture_model.error.grouping": "Pixel grouping must be enabled or disabled.",
+    "texture_model.error.group_scale": "Group X, Y, and Z scales must be finite numbers greater than zero and produce finite dimensions.",
     "texture_model.error.processing_mode": "Processing mode must be pixel, row, or column.",
     "texture_model.error.voxel_size": "Voxel Size must be greater than zero.",
     "texture_model.error.boolean_options": "Transparency and centering settings must be boolean.",
@@ -551,6 +481,11 @@
     "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
     "texture_model.field.center_model": "\u5C45\u4E2D\u6A21\u578B",
     "texture_model.field.group_name": "\u7EC4\u540D\u79F0",
+    "texture_model.field.split_outer_ring": "\u5916\u5708\u50CF\u7D20\u5355\u72EC\u5206\u7EC4",
+    "texture_model.field.group_scale": "\u5206\u7EC4\u7F29\u653E",
+    "texture_model.group.outer": "\u5916\u5708\u50CF\u7D20",
+    "texture_model.group.inner": "\u5185\u90E8\u50CF\u7D20",
+    "texture_model.note.group_scale": "\u4EE5\u5404\u7EC4\u4E2D\u5FC3\u7F29\u653E\uFF0C1 \u4E3A\u539F\u59CB\u5C3A\u5BF8\uFF0CXYZ \u4F7F\u7528\u4E16\u754C\u5750\u6807\u8F74\u3002",
     "texture_model.section.advanced": "\u9AD8\u7EA7\u8BBE\u7F6E",
     "texture_model.field.max_cubes": "\u6700\u5927 Cube \u6570\u91CF",
     "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u4F1A\u660E\u663E\u5F71\u54CD Blockbench \u6027\u80FD\u3002",
@@ -569,6 +504,8 @@
     "texture_model.error.image_dimensions": "\u56FE\u7247\u5BBD\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u987B\u4E3A\u6B63\u6574\u6570\u3002",
     "texture_model.error.image_rgba": "\u56FE\u7247 RGBA \u6570\u636E\u957F\u5EA6\u4E0E\u5C3A\u5BF8\u4E0D\u5339\u914D\u3002",
     "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u987B\u4E3A\u7ACB\u7740\u653E\u6216\u8EBA\u7740\u653E\u3002",
+    "texture_model.error.grouping": "\u5916\u5708\u5206\u7EC4\u9009\u9879\u5FC5\u987B\u4E3A\u5F00\u542F\u6216\u5173\u95ED\u3002",
+    "texture_model.error.group_scale": "\u5404\u7EC4 XYZ \u7F29\u653E\u5FC5\u987B\u4E3A\u5927\u4E8E\u96F6\u7684\u6709\u9650\u6570\u503C\uFF0C\u4E14\u4E0D\u80FD\u4EA7\u751F\u8FC7\u5927\u7684\u6A21\u578B\u5C3A\u5BF8\u3002",
     "texture_model.error.processing_mode": "\u5904\u7406\u65B9\u5F0F\u5FC5\u987B\u4E3A\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u5217\u3002",
     "texture_model.error.voxel_size": "\u4F53\u7D20\u5C3A\u5BF8\u5FC5\u987B\u5927\u4E8E\u96F6\u3002",
     "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u5C45\u4E2D\u9009\u9879\u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002",
@@ -621,6 +558,11 @@
     "texture_model.field.include_transparent": "\u5305\u542B\u900F\u660E\u50CF\u7D20",
     "texture_model.field.center_model": "\u6A21\u578B\u7F6E\u4E2D",
     "texture_model.field.group_name": "\u7FA4\u7D44\u540D\u7A31",
+    "texture_model.field.split_outer_ring": "\u5916\u5708\u50CF\u7D20\u7368\u7ACB\u5206\u7D44",
+    "texture_model.field.group_scale": "\u5206\u7D44\u7E2E\u653E",
+    "texture_model.group.outer": "\u5916\u5708\u50CF\u7D20",
+    "texture_model.group.inner": "\u5167\u90E8\u50CF\u7D20",
+    "texture_model.note.group_scale": "\u4EE5\u5404\u7D44\u4E2D\u5FC3\u7E2E\u653E\uFF0C1 \u70BA\u539F\u59CB\u5C3A\u5BF8\uFF0CXYZ \u4F7F\u7528\u4E16\u754C\u5EA7\u6A19\u8EF8\u3002",
     "texture_model.section.advanced": "\u9032\u968E\u8A2D\u5B9A",
     "texture_model.field.max_cubes": "Cube \u6578\u91CF\u4E0A\u9650",
     "texture_model.note.performance": "\u5927\u91CF Cube \u53EF\u80FD\u6703\u660E\u986F\u5F71\u97FF Blockbench \u6548\u80FD\u3002",
@@ -639,6 +581,8 @@
     "texture_model.error.image_dimensions": "\u5716\u7247\u5BEC\u5EA6\u548C\u9AD8\u5EA6\u5FC5\u9808\u70BA\u6B63\u6574\u6578\u3002",
     "texture_model.error.image_rgba": "\u5716\u7247 RGBA \u8CC7\u6599\u9577\u5EA6\u8207\u5C3A\u5BF8\u4E0D\u7B26\u3002",
     "texture_model.error.orientation": "\u6A21\u578B\u671D\u5411\u5FC5\u9808\u70BA\u76F4\u7ACB\u6216\u5E73\u653E\u3002",
+    "texture_model.error.grouping": "\u5916\u5708\u5206\u7D44\u9078\u9805\u5FC5\u9808\u70BA\u958B\u555F\u6216\u95DC\u9589\u3002",
+    "texture_model.error.group_scale": "\u5404\u7D44 XYZ \u7E2E\u653E\u5FC5\u9808\u70BA\u5927\u65BC\u96F6\u7684\u6709\u9650\u6578\u503C\uFF0C\u4E14\u4E0D\u80FD\u7522\u751F\u904E\u5927\u7684\u6A21\u578B\u5C3A\u5BF8\u3002",
     "texture_model.error.processing_mode": "\u8655\u7406\u65B9\u5F0F\u5FC5\u9808\u70BA\u6309\u50CF\u7D20\u3001\u6309\u884C\u6216\u6309\u6B04\u3002",
     "texture_model.error.voxel_size": "\u9AD4\u7D20\u5927\u5C0F\u5FC5\u9808\u5927\u65BC\u96F6\u3002",
     "texture_model.error.boolean_options": "\u900F\u660E\u50CF\u7D20\u548C\u6A21\u578B\u7F6E\u4E2D\u9078\u9805\u5FC5\u9808\u70BA\u5E03\u6797\u503C\u3002",
@@ -684,6 +628,237 @@
     }
     const detail = error instanceof Error ? error.message : String(error);
     return tr("error.unexpected", [detail]);
+  }
+
+  // src/blockbench/texture_writer.ts
+  function writeTexture(image, track) {
+    const name = uniqueTextureName(image.fileName, Texture.all.map((texture2) => texture2.name));
+    const texture = new Texture({ name });
+    track(texture);
+    texture.uv_width = image.width;
+    texture.uv_height = image.height;
+    texture.fromDataURL(image.dataURL);
+    return texture.add(false);
+  }
+
+  // src/blockbench/model_writer.ts
+  var FACE_DIRECTIONS = [
+    "north",
+    "south",
+    "east",
+    "west",
+    "up",
+    "down"
+  ];
+  function sameNumber(actual, expected) {
+    return Number.isFinite(actual) && Math.abs(actual - expected) <= 1e-8 * Math.max(1, Math.abs(expected));
+  }
+  function validatePlan(image, plan, options) {
+    validatePixelImage(image);
+    validatePlannerOptions(options);
+    validateMaxVoxels(options.maxVoxels);
+    const grouping = resolveGrouping(options);
+    const plannedGrouping = resolveGrouping(plan);
+    if (grouping.enabled !== plannedGrouping.enabled || !grouping.outerScale.every((value, axis) => sameNumber(value, plannedGrouping.outerScale[axis] ?? NaN)) || !grouping.innerScale.every((value, axis) => sameNumber(value, plannedGrouping.innerScale[axis] ?? NaN))) {
+      throw new ModelValidationError("Preview grouping settings are stale.", "error.preview_stale");
+    }
+    if (typeof image.dataURL !== "string" || !image.dataURL.startsWith("data:image/")) {
+      throw new ModelValidationError(
+        "The decoded image has no usable Data URL.",
+        "error.decoded_data_url"
+      );
+    }
+    if (plan.width !== image.width || plan.height !== image.height || plan.voxelSize !== options.voxelSize || (plan.orientation ?? "upright") !== (options.orientation ?? "upright") || !Number.isSafeInteger(plan.voxelCount) || plan.voxelCount !== plan.voxels.length) {
+      throw new ModelValidationError(
+        "Preview no longer matches the chosen image or settings.",
+        "error.preview_stale"
+      );
+    }
+    const expectedCount = countImagePixels(
+      image,
+      options.alphaThreshold,
+      options.includeTransparent
+    ).voxelCount;
+    if (plan.voxelCount !== expectedCount) {
+      throw new ModelValidationError(
+        "Preview no longer matches the transparency settings.",
+        "error.preview_transparency_stale"
+      );
+    }
+    if (plan.voxelCount > options.maxVoxels) {
+      throw new ModelValidationError(
+        `The model needs ${plan.voxelCount} Cubes, above the limit of ${options.maxVoxels}.`,
+        "error.cube_limit",
+        [plan.voxelCount, options.maxVoxels]
+      );
+    }
+    const size = options.voxelSize;
+    const outerMask = grouping.enabled && plan.voxelCount > 0 ? outerRingMask(image, options) : void 0;
+    let minSourceX = Infinity;
+    let minSourceY = Infinity;
+    let maxSourceX = -Infinity;
+    let maxSourceY = -Infinity;
+    let previousSourceIndex = -1;
+    for (const voxel of plan.voxels) {
+      const { sourceX, sourceY } = voxel;
+      const sourceIndex = sourceY * image.width + sourceX;
+      const traversalIndex = options.processingMode === "column" ? sourceX * image.height + sourceY : sourceIndex;
+      const pixelIndex = sourceIndex * 4;
+      if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) || sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height || traversalIndex <= previousSourceIndex || voxel.group !== (outerMask ? pixelGroup(outerMask, sourceIndex) : void 0) || voxel.rgba.r !== image.data[pixelIndex] || voxel.rgba.g !== image.data[pixelIndex + 1] || voxel.rgba.b !== image.data[pixelIndex + 2] || voxel.rgba.a !== image.data[pixelIndex + 3] || !options.includeTransparent && voxel.rgba.a <= options.alphaThreshold) {
+        throw new ModelValidationError("Preview pixel data is stale or invalid.", "error.preview_pixels");
+      }
+      previousSourceIndex = traversalIndex;
+      minSourceX = Math.min(minSourceX, sourceX);
+      maxSourceX = Math.max(maxSourceX, sourceX);
+      minSourceY = Math.min(minSourceY, sourceY);
+      maxSourceY = Math.max(maxSourceY, sourceY);
+    }
+    if (plan.voxelCount === 0) {
+      if ([...plan.bounds.min, ...plan.bounds.max, ...plan.bounds.size].some((dimension) => !sameNumber(dimension, 0))) {
+        throw new ModelValidationError(
+          "Empty preview bounds are invalid.",
+          "error.preview_empty_bounds"
+        );
+      }
+      return;
+    }
+    const minX = minSourceX * size;
+    const maxX = (maxSourceX + 1) * size;
+    const flat = options.orientation === "flat";
+    const minY = flat ? 0 : (image.height - 1 - maxSourceY) * size;
+    const maxY = flat ? size : (image.height - minSourceY) * size;
+    const minZ = flat ? minSourceY * size : 0;
+    const maxZ = flat ? (maxSourceY + 1) * size : size;
+    const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
+    const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
+    const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
+    const expectedVoxels = plan.voxels.map((voxel) => ({
+      ...voxel,
+      x: voxel.sourceX * size + offsetX,
+      y: (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY,
+      z: (flat ? voxel.sourceY * size : 0) + offsetZ,
+      size: void 0
+    }));
+    const expectedBounds = scalePixelGroups(expectedVoxels, size, grouping);
+    for (let index = 0; index < plan.voxels.length; index += 1) {
+      const voxel = plan.voxels[index];
+      const expected = expectedVoxels[index];
+      if (!voxel || !expected) continue;
+      const dimensions = voxelDimensions(voxel, size);
+      const expectedDimensions = voxelDimensions(expected, size);
+      if (!sameNumber(voxel.x, expected.x) || !sameNumber(voxel.y, expected.y) || !sameNumber(voxel.z, expected.z) || dimensions.length !== 3 || !dimensions.every((value, axis) => sameNumber(value, expectedDimensions[axis] ?? NaN))) {
+        throw new ModelValidationError("Preview geometry is stale or invalid.", "error.preview_geometry");
+      }
+    }
+    for (let axis = 0; axis < 3; axis += 1) {
+      if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedBounds.min[axis] ?? NaN) || !sameNumber(plan.bounds.max[axis] ?? NaN, expectedBounds.max[axis] ?? NaN) || !sameNumber(plan.bounds.size[axis] ?? NaN, expectedBounds.size[axis] ?? NaN)) {
+        throw new ModelValidationError("Preview bounds are stale or invalid.", "error.preview_bounds");
+      }
+    }
+  }
+  function preflightFormat(image) {
+    if (typeof Project === "undefined" || !Project || typeof Format === "undefined" || !Format) {
+      throw new ModelValidationError("Open a Blockbench model project before generating.", "error.open_project");
+    }
+    if (typeof Cube === "undefined" || typeof Group === "undefined" || typeof Texture === "undefined" || typeof Undo === "undefined" || typeof Canvas === "undefined" || !Format.edit_mode || Format.image_editor) {
+      throw new ModelValidationError(
+        "The current project format does not support Cube editing.",
+        "error.cube_unsupported"
+      );
+    }
+    if (Format.box_uv && !Format.optional_box_uv || Format.single_texture || Format.per_group_texture) {
+      throw new ModelValidationError(
+        "The current project format cannot use an independent texture on every Cube face.",
+        "error.per_face_uv_unsupported"
+      );
+    }
+    if (!Format.per_texture_uv_size && (!Number.isFinite(Project.texture_width) || Project.texture_width <= 0 || !Number.isFinite(Project.texture_height) || Project.texture_height <= 0)) {
+      throw new ModelValidationError("The current project UV dimensions are invalid.", "error.project_uv_size");
+    }
+    const uvWidth = Format.per_texture_uv_size ? image.width : Project.texture_width;
+    const uvHeight = Format.per_texture_uv_size ? image.height : Project.texture_height;
+    if (!Number.isFinite(uvWidth) || uvWidth <= 0 || !Number.isFinite(uvHeight) || uvHeight <= 0) {
+      throw new ModelValidationError("The current project has invalid UV dimensions.", "error.uv_size");
+    }
+  }
+  function cubeFaces(uv, texture) {
+    const faces = {};
+    for (const direction of FACE_DIRECTIONS) {
+      faces[direction] = { enabled: true, texture: texture.uuid, uv: [...uv] };
+    }
+    return faces;
+  }
+  function makeCube(voxel, size, texture, image, uvWidth, uvHeight) {
+    const uv = pixelToUVRect(
+      voxel.sourceX,
+      voxel.sourceY,
+      image.width,
+      image.height,
+      uvWidth,
+      uvHeight
+    );
+    const dimensions = voxelDimensions(voxel, size);
+    return new Cube({
+      name: `px_${voxel.sourceX}_${voxel.sourceY}`,
+      from: [voxel.x, voxel.y, voxel.z],
+      to: [voxel.x + dimensions[0], voxel.y + dimensions[1], voxel.z + dimensions[2]],
+      box_uv: false,
+      autouv: 0,
+      faces: cubeFaces(uv, texture)
+    });
+  }
+  function writeModel(image, plan, options) {
+    validatePlan(image, plan, options);
+    preflightFormat(image);
+    if (typeof options.groupName !== "string") {
+      throw new ModelValidationError("Group name must be text.", "error.group_name");
+    }
+    const preferredName = options.groupName.trim() || defaultGroupName(image.fileName);
+    const groupName = uniqueGroupName(preferredName, Group.all.map((group) => group.name));
+    const aspects = {
+      outliner: true,
+      elements: [],
+      groups: [],
+      textures: [],
+      selected_texture: true
+    };
+    Undo.initEdit(aspects);
+    try {
+      const texture = writeTexture(image, (created) => aspects.textures?.push(created));
+      const uvWidth = texture.getUVWidth();
+      const uvHeight = texture.getUVHeight();
+      const group = new Group({ name: groupName });
+      aspects.groups?.push(group);
+      group.addTo("root").init();
+      const subgroups = /* @__PURE__ */ new Map();
+      if (options.grouping?.enabled) {
+        for (const key of ["outer", "inner"]) {
+          const members = plan.voxels.filter((voxel) => voxel.group === key);
+          if (members.length === 0) continue;
+          const bounds = voxelBounds(members, plan.voxelSize);
+          const child = new Group({
+            name: tr("group." + key),
+            origin: [
+              (bounds.min[0] + bounds.max[0]) / 2,
+              (bounds.min[1] + bounds.max[1]) / 2,
+              (bounds.min[2] + bounds.max[2]) / 2
+            ]
+          });
+          aspects.groups?.push(child);
+          child.addTo(group).init();
+          subgroups.set(key, child);
+        }
+      }
+      for (const voxel of plan.voxels) {
+        const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
+        aspects.elements?.push(cube);
+        cube.addTo(voxel.group ? subgroups.get(voxel.group) ?? group : group).init();
+      }
+      Undo.finishEdit("Generate Texture Model", aspects);
+    } catch (error) {
+      Undo.cancelEdit(true);
+      throw error;
+    }
   }
 
   // src/domain/cancellation.ts
@@ -1017,7 +1192,7 @@
       if (!this.scene || !three) return;
       const count = plan.voxels.length;
       const size = plan.voxelSize;
-      const geometry = new three.BoxGeometry(size, size, size);
+      const geometry = new three.BoxGeometry(1, 1, 1);
       this.geometry = geometry;
       const alpha = new Float32Array(count);
       geometry.setAttribute("instanceAlpha", new three.InstancedBufferAttribute(alpha, 1));
@@ -1047,7 +1222,9 @@ ${fragmentMarker}`);
       for (let index = 0; index < count; index += 1) {
         const voxel = plan.voxels[index];
         if (!voxel) continue;
-        matrix.makeTranslation(voxel.x + size / 2, voxel.y + size / 2, voxel.z + size / 2);
+        const dimensions = voxelDimensions(voxel, size);
+        matrix.makeScale(dimensions[0], dimensions[1], dimensions[2]);
+        matrix.setPosition(voxel.x + dimensions[0] / 2, voxel.y + dimensions[1] / 2, voxel.z + dimensions[2] / 2);
         mesh.setMatrixAt(index, matrix);
         color.setRGB(voxel.rgba.r / 255, voxel.rgba.g / 255, voxel.rgba.b / 255);
         mesh.setColorAt(index, color);
@@ -1164,10 +1341,13 @@ ${fragmentMarker}`);
           y: this.height / 2 - (-sinYaw * sinPitch * dx + cosPitch * dy - cosYaw * sinPitch * dz) * scale
         };
       };
-      const sorted = plan.voxels.map((voxel) => ({
-        voxel,
-        depth: (voxel.x + plan.voxelSize / 2 - centerX) * viewX + (voxel.y + plan.voxelSize / 2 - centerY) * viewY + (voxel.z + plan.voxelSize / 2 - centerZ) * viewZ
-      }));
+      const sorted = plan.voxels.map((voxel) => {
+        const dimensions = voxelDimensions(voxel, plan.voxelSize);
+        return {
+          voxel,
+          depth: (voxel.x + dimensions[0] / 2 - centerX) * viewX + (voxel.y + dimensions[1] / 2 - centerY) * viewY + (voxel.z + dimensions[2] / 2 - centerZ) * viewZ
+        };
+      });
       sorted.sort((a, b) => a.depth - b.depth);
       for (const item of sorted) {
         const voxel = item.voxel;
@@ -1185,9 +1365,10 @@ ${fragmentMarker}`);
       const x0 = voxel.x;
       const y0 = voxel.y;
       const z0 = voxel.z;
-      const x1 = x0 + size;
-      const y1 = y0 + size;
-      const z1 = z0 + size;
+      const dimensions = voxelDimensions(voxel, size);
+      const x1 = x0 + dimensions[0];
+      const y1 = y0 + dimensions[1];
+      const z1 = z0 + dimensions[2];
       let points;
       if (face.axis === "x") {
         const x = face.positive ? x1 : x0;
@@ -1216,6 +1397,11 @@ ${fragmentMarker}`);
   };
 
   // src/ui/generator_dialog.ts
+  function groupScaleMarkup(group) {
+    return '<fieldset class="texture-model-scale-group"><legend>' + tr("group." + group) + '</legend><div class="texture-model-axis-fields">' + ["X", "Y", "Z"].map(
+      (axis) => "<label><span>" + axis + '</span><input data-field="' + group + "Scale" + axis + '" type="number" min="0.01" step="0.1" value="1" required></label>'
+    ).join("") + "</div></fieldset>";
+  }
   function buildMarkup() {
     return [
       '<div class="texture-model-shell"><div class="texture-model-columns">',
@@ -1234,6 +1420,12 @@ ${fragmentMarker}`);
       '<label class="texture-model-checkbox"><input data-field="includeTransparent" type="checkbox"> ' + tr("field.include_transparent") + "</label>",
       '<label class="texture-model-checkbox"><input data-field="centerModel" type="checkbox" checked> ' + tr("field.center_model") + "</label>",
       "<label>" + tr("field.group_name") + ' <input data-field="groupName" type="text" value="texture_model"></label>',
+      '<label class="texture-model-checkbox"><input data-field="splitOuterRing" type="checkbox"> ' + tr("field.split_outer_ring") + "</label>",
+      '<fieldset data-output="groupSettings" class="texture-model-group-settings" hidden disabled>',
+      "<legend>" + tr("field.group_scale") + "</legend>",
+      groupScaleMarkup("outer"),
+      groupScaleMarkup("inner"),
+      "<small>" + tr("note.group_scale") + "</small></fieldset>",
       "<details><summary>" + tr("section.advanced") + "</summary>",
       "<label>" + tr("field.max_cubes") + ' <input data-field="maxVoxels" type="number" min="1000" max="100000" step="1" value="20000" required></label>',
       "<small>" + tr("note.performance") + "</small></details></section>",
@@ -1267,6 +1459,7 @@ ${fragmentMarker}`);
       this.output("thumbnail").removeAttribute("src");
       this.clearPreview();
       this.setStatus("");
+      this.updateGroupFields();
       this.bind();
       this.updateState();
     }
@@ -1292,15 +1485,31 @@ ${fragmentMarker}`);
         "includeTransparent",
         "centerModel",
         "groupName",
-        "maxVoxels"
+        "maxVoxels",
+        "splitOuterRing",
+        "outerScaleX",
+        "outerScaleY",
+        "outerScaleZ",
+        "innerScaleX",
+        "innerScaleY",
+        "innerScaleZ"
       ]) {
         const field = this.field(name);
         const event = field.tagName === "SELECT" || field.type === "checkbox" ? "change" : "input";
-        this.listen(field, event, () => this.schedulePreview());
+        this.listen(field, event, () => {
+          this.updateGroupFields();
+          this.schedulePreview();
+        });
       }
       this.listen(required(this.root, '[data-action="generate"]'), "click", () => {
         this.generate();
       });
+    }
+    updateGroupFields() {
+      const enabled = this.field("splitOuterRing").checked;
+      const settings = this.output("groupSettings");
+      settings.hidden = !enabled;
+      settings.disabled = !enabled;
     }
     invalidatePreview() {
       this.revision += 1;
@@ -1382,9 +1591,16 @@ ${fragmentMarker}`);
       }
     }
     options() {
+      const splitOuterRing = this.field("splitOuterRing").checked;
+      const scale = (group) => splitOuterRing ? [
+        this.field(group + "ScaleX").valueAsNumber,
+        this.field(group + "ScaleY").valueAsNumber,
+        this.field(group + "ScaleZ").valueAsNumber
+      ] : [1, 1, 1];
       const options = {
         processingMode: this.field("processingMode").value,
         orientation: this.field("orientation").value,
+        grouping: { enabled: splitOuterRing, outerScale: scale("outer"), innerScale: scale("inner") },
         voxelSize: this.field("voxelSize").valueAsNumber,
         alphaThreshold: this.field("alphaThreshold").valueAsNumber,
         includeTransparent: this.field("includeTransparent").checked,
@@ -1585,6 +1801,11 @@ ${fragmentMarker}`);
   color: var(--color-accent); font-size: 20px; line-height: 1; pointer-events: none;
 }
 .texture-model-controls .texture-model-checkbox { justify-content: flex-start; }
+.texture-model-group-settings { margin: 8px 0; padding: 10px; border: 1px solid var(--color-accent); border-radius: 5px; min-width: 0; }
+.texture-model-scale-group { margin: 0 0 8px; padding: 0; border: 0; min-width: 0; }
+.texture-model-axis-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.texture-model-controls .texture-model-axis-fields label { gap: 4px; }
+.texture-model-controls .texture-model-axis-fields input[type=number] { width: 100%; min-width: 0; }
 .texture-model-import { display: flex; align-items: center; gap: 12px; }
 .texture-model-controls .texture-model-file {
   position: relative; display: inline-flex; justify-content: center; flex: 1;
@@ -1622,7 +1843,7 @@ ${fragmentMarker}`);
     tags: ["Texture", "Modeling", "Tool"],
     description: tr("plugin.description"),
     icon: "view_in_ar",
-    version: "0.2.0-dev3",
+    version: "0.2.0-dev4",
     variant: "both",
     min_version: "5.1.0",
     onload() {

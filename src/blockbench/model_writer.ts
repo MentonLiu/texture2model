@@ -1,13 +1,15 @@
 import { countImagePixels } from '../domain/model_planner';
 import { defaultGroupName, uniqueGroupName } from '../domain/naming';
 import { pixelToUVRect } from '../domain/pixel_to_uv';
+import { outerRingMask, pixelGroup, resolveGrouping, scalePixelGroups, voxelBounds, voxelDimensions } from '../domain/pixel_groups';
+import { tr } from '../i18n';
 import {
   ModelValidationError,
   validateMaxVoxels,
   validatePixelImage,
   validatePlannerOptions
 } from '../domain/validation';
-import type { DecodedImage, GeneratorOptions, ModelPlan, UVRect, VoxelPlan } from '../types';
+import type { DecodedImage, GeneratorOptions, ModelPlan, PixelGroup, UVRect, VoxelPlan } from '../types';
 import { writeTexture } from './texture_writer';
 
 const FACE_DIRECTIONS: readonly CubeFaceDirection[] = [
@@ -23,6 +25,13 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   validatePixelImage(image);
   validatePlannerOptions(options);
   validateMaxVoxels(options.maxVoxels);
+  const grouping = resolveGrouping(options);
+  const plannedGrouping = resolveGrouping(plan);
+  if (grouping.enabled !== plannedGrouping.enabled ||
+      !grouping.outerScale.every((value, axis) => sameNumber(value, plannedGrouping.outerScale[axis] ?? NaN)) ||
+      !grouping.innerScale.every((value, axis) => sameNumber(value, plannedGrouping.innerScale[axis] ?? NaN))) {
+    throw new ModelValidationError('Preview grouping settings are stale.', 'error.preview_stale');
+  }
   if (typeof image.dataURL !== 'string' || !image.dataURL.startsWith('data:image/')) {
     throw new ModelValidationError(
       'The decoded image has no usable Data URL.', 'error.decoded_data_url'
@@ -53,6 +62,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   }
 
   const size = options.voxelSize;
+  const outerMask = grouping.enabled && plan.voxelCount > 0 ? outerRingMask(image, options) : undefined;
   let minSourceX = Infinity;
   let minSourceY = Infinity;
   let maxSourceX = -Infinity;
@@ -67,6 +77,7 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
     if (!Number.isInteger(sourceX) || !Number.isInteger(sourceY) ||
         sourceX < 0 || sourceX >= image.width || sourceY < 0 || sourceY >= image.height ||
         traversalIndex <= previousSourceIndex ||
+        voxel.group !== (outerMask ? pixelGroup(outerMask, sourceIndex) : undefined) ||
         voxel.rgba.r !== image.data[pixelIndex] ||
         voxel.rgba.g !== image.data[pixelIndex + 1] ||
         voxel.rgba.b !== image.data[pixelIndex + 2] ||
@@ -100,20 +111,30 @@ function validatePlan(image: DecodedImage, plan: ModelPlan, options: GeneratorOp
   const offsetX = options.centerModel ? -(minX + maxX) / 2 : 0;
   const offsetY = options.centerModel ? -(minY + maxY) / 2 : 0;
   const offsetZ = options.centerModel ? -(minZ + maxZ) / 2 : 0;
-  for (const voxel of plan.voxels) {
-    if (!sameNumber(voxel.x, voxel.sourceX * size + offsetX) ||
-        !sameNumber(voxel.y, (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY) ||
-        !sameNumber(voxel.z, (flat ? voxel.sourceY * size : 0) + offsetZ)) {
+  const expectedVoxels = plan.voxels.map((voxel): VoxelPlan => ({
+    ...voxel,
+    x: voxel.sourceX * size + offsetX,
+    y: (flat ? 0 : (image.height - 1 - voxel.sourceY) * size) + offsetY,
+    z: (flat ? voxel.sourceY * size : 0) + offsetZ,
+    size: undefined
+  }));
+  const expectedBounds = scalePixelGroups(expectedVoxels, size, grouping);
+  for (let index = 0; index < plan.voxels.length; index += 1) {
+    const voxel = plan.voxels[index];
+    const expected = expectedVoxels[index];
+    if (!voxel || !expected) continue;
+    const dimensions = voxelDimensions(voxel, size);
+    const expectedDimensions = voxelDimensions(expected, size);
+    if (!sameNumber(voxel.x, expected.x) || !sameNumber(voxel.y, expected.y) ||
+        !sameNumber(voxel.z, expected.z) || dimensions.length !== 3 ||
+        !dimensions.every((value, axis) => sameNumber(value, expectedDimensions[axis] ?? NaN))) {
       throw new ModelValidationError('Preview geometry is stale or invalid.', 'error.preview_geometry');
     }
   }
-  const expectedMin = [minX + offsetX, minY + offsetY, minZ + offsetZ];
-  const expectedMax = [maxX + offsetX, maxY + offsetY, maxZ + offsetZ];
   for (let axis = 0; axis < 3; axis += 1) {
-    if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedMin[axis] ?? NaN) ||
-        !sameNumber(plan.bounds.max[axis] ?? NaN, expectedMax[axis] ?? NaN) ||
-        !sameNumber(plan.bounds.size[axis] ?? NaN,
-          (expectedMax[axis] ?? NaN) - (expectedMin[axis] ?? NaN))) {
+    if (!sameNumber(plan.bounds.min[axis] ?? NaN, expectedBounds.min[axis] ?? NaN) ||
+        !sameNumber(plan.bounds.max[axis] ?? NaN, expectedBounds.max[axis] ?? NaN) ||
+        !sameNumber(plan.bounds.size[axis] ?? NaN, expectedBounds.size[axis] ?? NaN)) {
       throw new ModelValidationError('Preview bounds are stale or invalid.', 'error.preview_bounds');
     }
   }
@@ -168,10 +189,11 @@ function makeCube(
     image.width, image.height,
     uvWidth, uvHeight
   );
+  const dimensions = voxelDimensions(voxel, size);
   return new Cube({
     name: `px_${voxel.sourceX}_${voxel.sourceY}`,
     from: [voxel.x, voxel.y, voxel.z],
-    to: [voxel.x + size, voxel.y + size, voxel.z + size],
+    to: [voxel.x + dimensions[0], voxel.y + dimensions[1], voxel.z + dimensions[2]],
     box_uv: false,
     autouv: 0,
     faces: cubeFaces(uv, texture)
@@ -206,10 +228,29 @@ export function writeModel(
     const group = new Group({ name: groupName });
     aspects.groups?.push(group);
     group.addTo('root').init();
+    const subgroups = new Map<PixelGroup, Group>();
+    if (options.grouping?.enabled) {
+      for (const key of ['outer', 'inner'] as const) {
+        const members = plan.voxels.filter((voxel) => voxel.group === key);
+        if (members.length === 0) continue;
+        const bounds = voxelBounds(members, plan.voxelSize);
+        const child = new Group({
+          name: tr('group.' + key),
+          origin: [
+            (bounds.min[0] + bounds.max[0]) / 2,
+            (bounds.min[1] + bounds.max[1]) / 2,
+            (bounds.min[2] + bounds.max[2]) / 2
+          ]
+        });
+        aspects.groups?.push(child);
+        child.addTo(group).init();
+        subgroups.set(key, child);
+      }
+    }
     for (const voxel of plan.voxels) {
       const cube = makeCube(voxel, plan.voxelSize, texture, image, uvWidth, uvHeight);
       aspects.elements?.push(cube);
-      cube.addTo(group).init();
+      cube.addTo(voxel.group ? subgroups.get(voxel.group) ?? group : group).init();
     }
     // Cube.init() sets up geometry, faces, and UVs; a second full refresh
     // would repeat that work for every voxel.

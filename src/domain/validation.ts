@@ -43,6 +43,16 @@ export function validatePlannerOptions(options: ModelPlannerOptions): void {
       options.orientation !== 'flat') {
     throw new ModelValidationError('Model orientation must be upright or flat.', 'error.orientation');
   }
+  const grouping = options.grouping;
+  if (grouping !== undefined) {
+    if (typeof grouping.enabled !== 'boolean') {
+      throw new ModelValidationError('Pixel grouping must be enabled or disabled.', 'error.grouping');
+    }
+    if (grouping.enabled && [grouping.outerScale, grouping.innerScale].some((scale) =>
+      !Array.isArray(scale) || scale.length !== 3 || !scale.every((value) => Number.isFinite(value) && value > 0))) {
+      throw new ModelValidationError('Each group needs positive finite X, Y, and Z scales.', 'error.group_scale');
+    }
+  }
   validateAlphaThreshold(options.alphaThreshold);
   if (typeof options.includeTransparent !== 'boolean' ||
       typeof options.centerModel !== 'boolean') {

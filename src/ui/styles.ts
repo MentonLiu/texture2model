@@ -27,6 +27,11 @@ export const pluginStyles = `
   color: var(--color-accent); font-size: 20px; line-height: 1; pointer-events: none;
 }
 .texture-model-controls .texture-model-checkbox { justify-content: flex-start; }
+.texture-model-group-settings { margin: 8px 0; padding: 10px; border: 1px solid var(--color-accent); border-radius: 5px; min-width: 0; }
+.texture-model-scale-group { margin: 0 0 8px; padding: 0; border: 0; min-width: 0; }
+.texture-model-axis-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.texture-model-controls .texture-model-axis-fields label { gap: 4px; }
+.texture-model-controls .texture-model-axis-fields input[type=number] { width: 100%; min-width: 0; }
 .texture-model-import { display: flex; align-items: center; gap: 12px; }
 .texture-model-controls .texture-model-file {
   position: relative; display: inline-flex; justify-content: center; flex: 1;
