@@ -32,8 +32,8 @@ npm run build
 
 1. Open a compatible Blockbench model project.
 2. Choose **Texture Model → Open Texture Model Generator…**.
-3. Select a PNG image.
-4. Set the options and click **Preview**. Drag the preview to rotate and use the wheel to zoom.
+3. Select a PNG image. Preview starts automatically after import.
+4. Adjust the options; the preview updates automatically on every edit. Drag to rotate and use the wheel to zoom.
 5. Review the preview and click **Generate in Workspace**.
 
 The generated texture and all Cubes are placed under one new root Group. One Undo removes the entire generation; Redo restores it.
@@ -41,7 +41,7 @@ The generated texture and all Cubes are placed under one new root Group. One Und
 | Option | Default | Effect |
 | --- | --- | --- |
 | Processing | By pixel | Pixel, row, and column modes create the same geometry and UVs; traversal order and scheduling differ. |
-| Model orientation | Upright | Upright uses the vertical plane; Lying flat uses the horizontal plane. Changing orientation requires another preview. |
+| Model orientation | Upright | Upright uses the vertical plane; Lying flat uses the horizontal plane. Changing orientation automatically updates the preview. |
 | Voxel Size | 1 | Width, height, and depth of each Cube. |
 | Alpha Threshold | 0 | Generate when source alpha is strictly greater than the threshold. |
 | Include Transparent | Off | When on, every pixel gets a Cube and retains its original texture alpha. |
@@ -49,7 +49,7 @@ The generated texture and all Cubes are placed under one new root Group. One Und
 | Group Name | Image stem + `_texture_model` | Name is made unique if needed. |
 | Maximum Cubes | 20,000 | Editable from 1,000 to 100,000 in Advanced Settings. |
 
-Changes to any generation option invalidate the preview. Preview creates no Blockbench Cube, Group, or Texture. Preview colors are a lightweight visual approximation; the generated model uses the original image texture.
+Changes to any generation option automatically refresh the preview. Generate is available when the latest preview is ready. Rapid edits cancel older calculations, and updates preserve rotation and zoom. Invalid inputs or counts over the limit clear the outdated preview and disable generation. Preview creates no Blockbench Cube, Group, or Texture. Preview colors are a lightweight visual approximation; the generated model uses the original image texture.
 
 ### Performance
 
@@ -63,7 +63,7 @@ The image-to-plan stage yields to the UI in batches and can be cancelled. The fi
 npm run build
 ~~~
 
-The current development target is **0.2.0**, with **0.2.0-dev2** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
+The current development target is **0.2.0**, with **0.2.0-dev3** delivered on `dev`. Features merge into `dev`; merging into `main` requires an explicit user instruction. See [AGENTS.md](AGENTS.md) and [git.md](git.md).
 
 Use **LSP diagnostics only** for syntax and type feedback. Do not run typecheck commands, Lint, tests, or plugin runtime verification. `npm run build` only packages the installable plugin with esbuild. Existing test sources are historical and must not be run. Runtime acceptance is performed by the user; see [docs/TESTING.md](docs/TESTING.md).
 
@@ -103,8 +103,8 @@ npm run build
 
 1. 打开兼容的 Blockbench 模型项目。
 2. 选择 **纹理模型 → 打开纹理模型生成器…**。
-3. 选择 PNG 图片。
-4. 设置参数并点击 **预览**。拖动预览可旋转，滚动滚轮可缩放。
+3. 选择 PNG 图片，导入后自动开始预览。
+4. 调整参数，每次输入或选项变化都会自动更新预览。拖动可旋转，滚动滚轮可缩放。
 5. 确认预览后，点击 **生成到工作区**。
 
 生成的纹理和所有 Cube 都会放入一个新建的根 Group。执行一次撤销即可移除本次生成的全部内容；重做可恢复。
@@ -112,7 +112,7 @@ npm run build
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | 处理方式 | 按像素 | 支持按像素、按行和按列；生成的几何形状和 UV 相同，遍历顺序与任务调度不同。 |
-| 模型朝向 | 立着放 | 可选立着放或躺着放；切换后需重新预览，预览和生成使用相同朝向。 |
+| 模型朝向 | 立着放 | 可选立着放或躺着放；切换后自动更新预览，预览和生成使用相同朝向。 |
 | 体素尺寸 | 1 | 每个 Cube 的宽、高和厚度。 |
 | 透明度阈值 | 0 | 仅当原像素 alpha 严格大于阈值时生成。 |
 | 包含透明像素 | 关闭 | 开启后每个像素都会生成 Cube，并保留原纹理透明度。 |
@@ -120,7 +120,7 @@ npm run build
 | Group 名称 | 图片文件名 + `_texture_model` | 名称冲突时会自动生成唯一名称。 |
 | Cube 数量上限 | 20,000 | 可在“高级设置”中调整为 1,000 至 100,000。 |
 
-修改任何生成参数都会让预览失效，必须重新预览后才能生成。预览不会创建 Blockbench Cube、Group 或 Texture。预览颜色是轻量级视觉近似；最终模型使用原始图片纹理。
+修改任何生成参数都会自动更新预览，最新预览就绪后即可生成。连续操作会取消旧计算，更新时保留旋转和缩放视角。输入无效或超出数量上限时，清除过期预览并禁用生成。预览不会创建 Blockbench Cube、Group 或 Texture。预览颜色是轻量级视觉近似；最终模型使用原始图片纹理。
 
 ### 性能
 
@@ -134,7 +134,7 @@ Cube 数量随符合条件的像素数增加：全不透明的 128 × 128 图片
 npm run build
 ~~~
 
-当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev2** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
+当前开发目标为 **0.2.0**，测试版本 **0.2.0-dev3** 在 `dev` 分支交付。功能完成后合回 `dev`；只有用户明确要求时才能合并 `main`。详见 [AGENTS.md](AGENTS.md) 和 [git.md](git.md)。
 
 **只允许 LSP 语法和类型诊断**，禁止运行类型检查命令、Lint、任何代码测试或插件运行验证。`npm run build` 仅通过 esbuild 打包安装文件。已有测试源码仅保留历史记录，不得运行。实际功能由用户亲自验收，见 [docs/TESTING.md](docs/TESTING.md)。
 

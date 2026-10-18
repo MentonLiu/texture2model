@@ -44,6 +44,12 @@ Image coordinates start at the upper left. For image height H and voxel size S, 
 
 The writer computes one UV rectangle through the shared pixelToUVRect helper, using Texture.getUVWidth/Height. The same rectangle and texture UUID are assigned to north, south, east, west, up, and down. Every Cube has Box UV disabled and Auto UV set to zero.
 
+## Live preview lifecycle
+
+Importing a PNG starts preview automatically. Text/number fields update on input; selects and checkboxes update on change. Edits invalidate the confirmed plan immediately and schedule the latest calculation for the next animation frame, coalescing edits in the same frame. Decoding and planning use separate cancellation tokens, so changing settings during import does not abort decoding. Successful decoding reads the latest settings and starts preview.
+
+Each preview is tied to a revision. Cancelled, superseded, or disposed tasks cannot publish progress, render results, report errors, or dispose a newer renderer. The controller reuses the renderer to preserve rotation, zoom, and its WebGL context. It clears stale geometry on invalid input, an exceeded limit, or a new file. Generate stays disabled while reading or updating and becomes available only for a current valid plan. Closing cancels queued frames, decoding, and planning, then releases all preview resources.
+
 ## Transaction
 
 Generation validates the plan, count, image, UV space, and format before opening Undo. One synchronous Undo edit tracks outliner, elements, groups, textures, and selected texture. New objects enter tracking arrays before host mutation. On error, Undo.cancelEdit(true) reverts the partial edit.
